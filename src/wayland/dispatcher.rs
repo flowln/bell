@@ -8,10 +8,6 @@ pub mod dispatcher {
     use wayland_client::protocol::wl_shm::WlShm;
     use wayland_client::protocol::wl_surface::WlSurface;
 
-    use wayland_protocols::xdg::shell::client::xdg_surface::XdgSurface;
-    use wayland_protocols::xdg::shell::client::xdg_toplevel::XdgToplevel;
-    use wayland_protocols::xdg::shell::client::xdg_wm_base::XdgWmBase;
-
     use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1;
     use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrLayerSurfaceV1;
 
@@ -22,7 +18,6 @@ pub mod dispatcher {
     pub struct BufferUserData {
         pub parent_id: Option<ObjectId>,
     }
-    pub struct XdgUserData;
     pub struct WlrUserData {
         pub parent_id: ObjectId,
     }
@@ -60,9 +55,6 @@ pub mod dispatcher {
                     } else if binds_on::<WlShm>(&interface) {
                         state.shared_memory =
                             Some(registry.bind(name, version, queue_handle, UserData {}));
-                    } else if binds_on::<XdgWmBase>(&interface) {
-                        state.xdg_wm_base =
-                            Some(registry.bind(name, version, queue_handle, XdgUserData {}));
                     } else if binds_on::<ZwlrLayerShellV1>(&interface) {
                         state.wlr_layer_shell =
                             Some(registry.bind(name, version, queue_handle, UserData {}));
@@ -88,82 +80,6 @@ pub mod dispatcher {
             _qhandle: &QueueHandle<GlobalData>,
         ) {
             println!("{_proxy:?}");
-        }
-    }
-
-    impl Dispatch<XdgWmBase, XdgUserData> for GlobalData {
-        fn event(
-            _state: &mut GlobalData,
-            proxy: &XdgWmBase,
-            event: <XdgWmBase as Proxy>::Event,
-            _data: &XdgUserData,
-            _conn: &Connection,
-            _qhandle: &QueueHandle<GlobalData>,
-        ) {
-            type EventType = <XdgWmBase as Proxy>::Event;
-            match event {
-                EventType::Ping { serial } => {
-                    proxy.pong(serial);
-                }
-                _ => {
-                    unreachable!()
-                }
-            }
-        }
-    }
-
-    impl Dispatch<XdgSurface, SurfaceUserData> for GlobalData {
-        fn event(
-            _state: &mut GlobalData,
-            proxy: &XdgSurface,
-            event: <XdgSurface as Proxy>::Event,
-            _data: &SurfaceUserData,
-            _conn: &Connection,
-            _qhandle: &QueueHandle<GlobalData>,
-        ) {
-            type EventType = <XdgSurface as Proxy>::Event;
-            match event {
-                EventType::Configure { serial } => {
-                    proxy.ack_configure(serial);
-                }
-                _ => {
-                    unreachable!()
-                }
-            }
-        }
-    }
-
-    impl Dispatch<XdgToplevel, SurfaceUserData> for GlobalData {
-        fn event(
-            state: &mut GlobalData,
-            _proxy: &XdgToplevel,
-            event: <XdgToplevel as Proxy>::Event,
-            data: &SurfaceUserData,
-            _conn: &Connection,
-            _qhandle: &QueueHandle<GlobalData>,
-        ) {
-            type EventType = <XdgToplevel as Proxy>::Event;
-            match event {
-                EventType::Close => {
-                    state.destroy_surface(&data.parent_id);
-                }
-                EventType::Configure {
-                    width,
-                    height,
-                    states,
-                } => {
-                    println!("XdgToplevel: configure {} {}", width, height);
-                }
-                EventType::ConfigureBounds { width, height } => {
-                    println!("XdgToplevel: configure_bounds {} {}", width, height);
-                }
-                EventType::WmCapabilities { capabilities } => {
-                    println!("XdgToplevel: wm_capabilities")
-                }
-                _ => {
-                    unreachable!()
-                }
-            }
         }
     }
 

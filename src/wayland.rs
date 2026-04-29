@@ -7,7 +7,7 @@ pub mod wayland {
     use std::collections::HashMap;
     use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
-    use libc::{c_char, c_void, off_t};
+    use libc::{c_void, off_t};
     use libc::{ftruncate, mmap, shm_open, shm_unlink};
     use libc::{
         EEXIST, MAP_SHARED, O_CREAT, O_EXCL, O_RDWR, PROT_READ, PROT_WRITE, S_IRUSR, S_IWUSR,
@@ -21,10 +21,6 @@ pub mod wayland {
     use wayland_client::protocol::wl_shm_pool::WlShmPool;
     use wayland_client::protocol::wl_surface::WlSurface;
     use wayland_client::{EventQueue, Proxy, QueueHandle};
-
-    use wayland_protocols::xdg::shell::client::xdg_surface::XdgSurface;
-    use wayland_protocols::xdg::shell::client::xdg_toplevel::XdgToplevel;
-    use wayland_protocols::xdg::shell::client::xdg_wm_base::XdgWmBase;
 
     use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1;
     use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrLayerSurfaceV1;
@@ -426,7 +422,6 @@ pub mod wayland {
 
     pub struct GlobalData {
         pub compositor: Option<WlCompositor>,
-        pub xdg_wm_base: Option<XdgWmBase>,
         pub wlr_layer_shell: Option<ZwlrLayerShellV1>,
         pub shared_memory: Option<WlShm>,
 
@@ -440,7 +435,6 @@ pub mod wayland {
         pub fn new(queue_handle: QueueHandle<Self>) -> Cell<GlobalData> {
             Cell::new(GlobalData {
                 compositor: None,
-                xdg_wm_base: None,
                 wlr_layer_shell: None,
                 shared_memory: None,
                 queue_handle,
