@@ -1,5 +1,5 @@
-mod epoll;
 mod dispatcher;
+mod epoll;
 
 pub mod wayland {
     use std::cell::Cell;
@@ -7,9 +7,11 @@ pub mod wayland {
     use std::collections::HashMap;
     use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
-    use libc::{MAP_SHARED, O_CREAT, O_RDWR, O_EXCL, PROT_READ, PROT_WRITE, S_IRUSR, S_IWUSR, EEXIST};
     use libc::{c_char, c_void, off_t};
     use libc::{ftruncate, mmap, shm_open, shm_unlink};
+    use libc::{
+        EEXIST, MAP_SHARED, O_CREAT, O_EXCL, O_RDWR, PROT_READ, PROT_WRITE, S_IRUSR, S_IWUSR,
+    };
 
     pub use wayland_client::backend::ObjectId;
     use wayland_client::protocol::wl_buffer::WlBuffer;
@@ -18,9 +20,7 @@ pub mod wayland {
     use wayland_client::protocol::wl_shm::{Format, WlShm};
     use wayland_client::protocol::wl_shm_pool::WlShmPool;
     use wayland_client::protocol::wl_surface::WlSurface;
-    use wayland_client::{
-        EventQueue, Proxy, QueueHandle,
-    };
+    use wayland_client::{EventQueue, Proxy, QueueHandle};
 
     use wayland_protocols::xdg::shell::client::xdg_surface::XdgSurface;
     use wayland_protocols::xdg::shell::client::xdg_toplevel::XdgToplevel;
@@ -34,11 +34,9 @@ pub mod wayland {
 
     use super::dispatcher::dispatcher::*;
 
-
     fn format_shm_name(attempt_number: u16) -> String {
         format!("/wl_shm_bell-{:08}\0", attempt_number)
     }
-
 
     pub struct MemoryPool {
         fd: RawFd,
@@ -73,7 +71,11 @@ pub mod wayland {
                 let mut fd;
                 loop {
                     shm_pool_name = format_shm_name(attempt_number);
-                    fd = shm_open(shm_pool_name.as_ptr() as *const i8, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR);
+                    fd = shm_open(
+                        shm_pool_name.as_ptr() as *const i8,
+                        O_RDWR | O_CREAT | O_EXCL,
+                        S_IRUSR | S_IWUSR,
+                    );
 
                     if fd >= 0 {
                         break;

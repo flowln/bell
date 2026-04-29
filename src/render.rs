@@ -2,11 +2,9 @@ pub use cosmic_text::Color;
 
 #[macro_export]
 macro_rules! with_scale {
-    ( $self:expr,$x:expr ) => {
-        {
-            ($x as usize) * $self.buffer_scale
-        }
-    };
+    ( $self:expr,$x:expr ) => {{
+        ($x as usize) * $self.buffer_scale
+    }};
 }
 
 fn blend_colors(first_color: Color, second_color: Color) -> Color {
@@ -147,12 +145,24 @@ pub mod render {
             // Top
             self.draw_rect(0, 0, width, size, color);
             // Bottom
-            self.draw_rect(size as i32, (self.height - size) as i32, width - 2*size, size, color);
+            self.draw_rect(
+                size as i32,
+                (self.height - size) as i32,
+                width - 2 * size,
+                size,
+                color,
+            );
 
             // Left
-            self.draw_rect(0, size as i32, size, height - 2*size, color);
+            self.draw_rect(0, size as i32, size, height - 2 * size, color);
             // Right
-            self.draw_rect((self.width - size) as i32, size as i32, size, height - 2*size, color);
+            self.draw_rect(
+                (self.width - size) as i32,
+                size as i32,
+                size,
+                height - 2 * size,
+                color,
+            );
         }
 
         pub fn clear(&mut self, color: Option<Color>) {

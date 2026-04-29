@@ -1,7 +1,5 @@
 pub mod dispatcher {
-    use wayland_client::{
-        Connection, Dispatch, Proxy, QueueHandle, protocol::wl_registry,
-    };
+    use wayland_client::{protocol::wl_registry, Connection, Dispatch, Proxy, QueueHandle};
 
     use wayland_client::backend::ObjectId;
     use wayland_client::protocol::wl_buffer::WlBuffer;
@@ -33,7 +31,6 @@ pub mod dispatcher {
     }
     pub struct WlSurfaceUserData;
     pub struct WlOutputUserData;
-
 
     fn binds_on<I: Proxy + 'static>(interface: &String) -> bool {
         interface == I::interface().name
@@ -281,4 +278,3 @@ pub mod dispatcher {
         }
     }
 }
-

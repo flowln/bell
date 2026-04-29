@@ -1,121 +1,20 @@
+use crate::configuration::OutputConfiguration;
 use crate::wayland::wayland as backend;
-use crate::render::Color;
 
 use std::collections::HashMap;
 
-#[derive(Clone, Copy)]
-pub struct Margin {
-    pub top: i32,
-    pub right: i32,
-    pub bottom: i32,
-    pub left: i32,
-}
-
-impl Margin {
-    pub fn with_top(&self, top: i32) -> Margin {
-        let mut ret = self.clone();
-        ret.top = top;
-        ret
-    }
-    pub fn with_right(&self, right: i32) -> Margin {
-        let mut ret = self.clone();
-        ret.right = right;
-        ret
-    }
-    pub fn with_bottom(&self, bottom: i32) -> Margin {
-        let mut ret = self.clone();
-        ret.bottom = bottom;
-        ret
-    }
-    pub fn with_left(&self, left: i32) -> Margin {
-        let mut ret = self.clone();
-        ret.left = left;
-        ret
-    }
-}
-
-pub enum GrowthDirection {
-    Up,
-    Right,
-    Down,
-    Left,
-}
-
-pub struct OutputSpecifier {
-    pub width: i32,
-    pub height: i32,
-
-    pub background_color: Color,
-
-    pub border_color: Option<Color>,
-    pub border_size: usize,
-
-    pub anchor: Option<backend::Anchor>,
-    pub direction: GrowthDirection,
-
-    pub layer: Option<backend::Layer>,
-
-    pub margins: Margin,
-}
-
-impl OutputSpecifier {
-    pub fn new(width: i32, height: i32) -> OutputSpecifier {
-        OutputSpecifier {
-            width,
-            height,
-            background_color: Color::rgba(0x80, 0x80, 0x80, 0xFF),
-            border_color: None,
-            border_size: 0,
-            anchor: None,
-            direction: GrowthDirection::Up,
-            layer: None,
-            margins: Margin {
-                left: 0,
-                right: 0,
-                top: 0,
-                bottom: 0,
-            },
-        }
-    }
-
-    pub fn set_anchor(&mut self, anchor: backend::Anchor) {
-        self.anchor.replace(anchor);
-    }
-
-    pub fn set_growth_direction(&mut self, direction: GrowthDirection) {
-        self.direction = direction;
-    }
-
-    pub fn set_layer(&mut self, layer: backend::Layer) {
-        self.layer.replace(layer);
-    }
-
-    pub fn set_margins(
-        &mut self,
-        left: i32,
-        right: i32,
-        top: i32,
-        bottom: i32,
-    ) {
-        self.margins.left = left;
-        self.margins.right = right;
-        self.margins.top = top;
-        self.margins.bottom = bottom;
-    }
-}
-
-pub struct Notification {
+pub struct Notification<'n> {
     pub title: String,
     pub message: String,
 
     pub is_dirty: bool,
 
-    outputs: HashMap<String, OutputSpecifier>,
+    outputs: HashMap<String, &'n OutputConfiguration>,
     surface_ids: Vec<backend::ObjectId>,
 }
 
-impl Notification {
-    pub fn new(title: String, message: String) -> Notification {
+impl<'n> Notification<'n> {
+    pub fn new(title: String, message: String) -> Notification<'n> {
         Notification {
             title,
             message,
@@ -134,14 +33,14 @@ impl Notification {
         self.is_dirty = true;
     }
 
-    pub fn add_output(&mut self, output_name: &String, spec: OutputSpecifier) {
+    pub fn add_output(&mut self, output_name: &String, spec: &'n OutputConfiguration) {
         self.outputs.insert(output_name.clone(), spec);
     }
 
     pub fn create_surfaces(&mut self, global_data: &mut backend::GlobalData) {
         for (output_name, spec) in self.outputs.iter() {
             let surface_id = global_data
-                .create_surface(spec.width, spec.height, &output_name)
+                .create_surface(spec.width.unwrap(), spec.height.unwrap(), &output_name)
                 .unwrap();
 
             // FIXME: This shouldn't be here probably.
@@ -156,11 +55,12 @@ impl Notification {
                         wlr_surface.set_layer(layer);
                     }
 
+                    let margins = spec.margins.unwrap();
                     wlr_surface.set_margin(
-                        spec.margins.top,
-                        spec.margins.right,
-                        spec.margins.bottom,
-                        spec.margins.left,
+                        margins.top,
+                        margins.right,
+                        margins.bottom,
+                        margins.left,
                     );
                 }
                 _ => {}
@@ -170,10 +70,7 @@ impl Notification {
         }
     }
 
-    pub fn delete_surface(
-        &mut self,
-        surface_id: &backend::ObjectId,
-    ) {
+    pub fn delete_surface(&mut self, surface_id: &backend::ObjectId) {
         self.surface_ids.retain(|id| id != surface_id);
     }
 
@@ -196,8 +93,8 @@ impl Notification {
         }
     }
 
-    pub fn get_output_spec(&self, output_name: &String) -> Option<&OutputSpecifier> {
-        self.outputs.get(output_name)
+    pub fn get_output_spec(&self, output_name: &String) -> Option<&OutputConfiguration> {
+        self.outputs.get(output_name).map(|&c| c)
     }
 }
 
@@ -207,24 +104,26 @@ pub enum SurfaceProcessingOutput {
     SurfaceDestroyed,
 }
 
-pub struct NotificationManager {
-    active_notifications: Vec<Notification>,
+pub struct NotificationManager<'m> {
+    active_notifications: Vec<Notification<'m>>,
 }
 
-impl NotificationManager {
-    pub fn new() -> NotificationManager {
-        NotificationManager { active_notifications: Vec::new() }
+impl<'m> NotificationManager<'m> {
+    pub fn new() -> NotificationManager<'m> {
+        NotificationManager {
+            active_notifications: Vec::new(),
+        }
     }
 
-    pub fn add_notification(&mut self, notification: Notification) {
+    pub fn add_notification(&mut self, notification: Notification<'m>) {
         self.active_notifications.push(notification)
     }
 
-    pub fn remove_by_index(&mut self, index: usize) -> Notification {
+    pub fn remove_by_index(&mut self, index: usize) -> Notification<'_> {
         self.active_notifications.remove(index)
     }
 
-    pub fn get_by_index(&mut self, index: usize) -> Option<&mut Notification> {
+    pub fn get_by_index(&mut self, index: usize) -> Option<&mut Notification<'m>> {
         self.active_notifications.get_mut(index)
     }
 
@@ -232,8 +131,16 @@ impl NotificationManager {
         !self.active_notifications.is_empty()
     }
 
-    pub fn process_active_notifications<F>(&mut self, mut process_surface: F) -> Vec<Notification>
-        where F: FnMut(&backend::ObjectId, &Notification, &mut HashMap<String, i32>) -> SurfaceProcessingOutput
+    pub fn process_active_notifications<F>(
+        &mut self,
+        mut process_surface: F,
+    ) -> Vec<Notification<'_>>
+    where
+        F: FnMut(
+            &backend::ObjectId,
+            &Notification,
+            &mut HashMap<String, i32>,
+        ) -> SurfaceProcessingOutput,
     {
         let mut indexes_to_remove = Vec::<usize>::new();
         let mut offset_per_output = HashMap::<String, i32>::new();
@@ -268,7 +175,7 @@ impl NotificationManager {
 
         let mut inactive_notifications = Vec::<Notification>::new();
         for idx in indexes_to_remove {
-            inactive_notifications.push(self.remove_by_index(idx));
+            inactive_notifications.push(self.active_notifications.remove(idx));
         }
 
         inactive_notifications
