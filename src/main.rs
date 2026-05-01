@@ -1,9 +1,8 @@
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::time;
 
-use wayland_client::backend::ObjectId;
 use wayland_client::Connection;
+use wayland_client::backend::ObjectId;
 
 mod configuration;
 mod notification;
@@ -11,9 +10,8 @@ mod render;
 mod wayland;
 
 use configuration::Configuration;
-use render::render::Renderer;
 use render::Color;
-use wayland::wayland as backend;
+use render::render::Renderer;
 
 use configuration::{GrowthDirection, OutputConfiguration};
 use notification::{Notification, NotificationManager, SurfaceProcessingOutput};
@@ -73,15 +71,14 @@ where
 }
 
 fn process_surface(
-    data: &mut Cell<backend::GlobalData>,
     renderers_for_surfaces: &mut HashMap<ObjectId, Renderer>,
     offset_per_output: &mut HashMap<String, i32>,
     notification: &Notification,
     surface_id: &ObjectId,
 ) -> SurfaceProcessingOutput {
-    let global_data = data.get_mut();
+    let mut wayland_state = wayland::wayland_state_write();
 
-    let surface = global_data.get_surface(surface_id);
+    let surface = wayland_state.get_surface(surface_id);
     if surface.is_none() {
         return SurfaceProcessingOutput::NoSurface;
     }
@@ -107,7 +104,7 @@ fn process_surface(
                 );
             }
 
-            use backend::SurfaceBackend;
+            use wayland::SurfaceBackend;
             if let SurfaceBackend::Wlr(wlr_surface) = &mut surface.backend {
                 let original_margins = output_spec.margins?;
                 let margins = match output_spec.direction? {
@@ -152,87 +149,81 @@ fn main() {
         eprintln!("Could not find a valid configuration file! Using the default configuration.");
     }
     let configuration = configuration.unwrap_or_default();
+    let event_handler = configuration.get_event_handler();
 
-    let (mut event_queue, mut global_data) = {
+    let mut event_queue = {
         let conn = Connection::connect_to_env().unwrap();
 
         let display = conn.display();
 
         let mut event_queue = conn.new_event_queue();
-        let qh = event_queue.handle();
+        let queue_handle = event_queue.handle();
 
-        let _registry = display.get_registry(&qh, ());
+        let _registry = display.get_registry(&queue_handle, ());
 
-        let mut global_data = backend::GlobalData::new(qh);
-        event_queue.roundtrip(&mut global_data.get_mut()).unwrap();
-        
-        (event_queue, global_data)
+        let mut wayland_state = wayland::wayland_state_write();
+        wayland_state.initialize(queue_handle, &display);
+
+        while wayland_state.pending_data_amount != 0 {
+            event_queue.roundtrip(&mut wayland_state).unwrap();
+        }
+
+        event_queue
     };
 
-    let mut socket_handler = backend::SocketManager::new(&mut event_queue, &mut global_data);
-    while global_data.get_mut().outputs.len() == 0 {
-        socket_handler.handle(10);
-    }
-
+    let mut socket_handler = wayland::SocketManager::new(&mut event_queue);
     let mut notification_manager = NotificationManager::new();
-    let mut renderers_for_surfaces = HashMap::<backend::ObjectId, Renderer>::new();
+    let mut renderers_for_surfaces = HashMap::<wayland::SurfaceID, Renderer>::new();
 
-    let mut notification = Notification::new(
-        "New notification".to_owned(),
-        "This is a new notification from bell from second 0!".to_owned(),
-    );
-    for output_name in global_data.get_mut().outputs.keys() {
-        let specifier = configuration.get_output_configuration(output_name);
-        notification.add_output(output_name, specifier);
+    let mut manager_callback =
+        |surface_id: &wayland::SurfaceID,
+         notification: &Notification,
+         offset_per_output: &mut HashMap<String, i32>| {
+            process_surface(
+                &mut renderers_for_surfaces,
+                offset_per_output,
+                notification,
+                surface_id,
+            )
+        };
+
+    let mut n_notification = 1;
+
+    for x in 0..3 {
+        let mut notification = Notification::new(
+            format!("({x}) New notification"),
+            "This is a new notification from bell!".to_owned(),
+        );
+
+        notification.try_make_surfaces(&configuration);
+        notification_manager.add_notification(notification);
     }
-    notification.create_surfaces(global_data.get_mut());
 
-    notification_manager.add_notification(notification);
-
-    let time_now = time::Instant::now();
-    let mut created_notification = false;
+    let start_time = std::time::Instant::now();
     while notification_manager.is_active() {
-        let notification = notification_manager.get_by_index(0).unwrap();
-        notification.set_message(format!(
-            "This is a new notification from bell from second {}!",
-            time_now.elapsed().as_secs()
-        ));
+        // let elapsed_time = start_time.elapsed().as_secs();
+        // if elapsed_time > n_notification && notification_manager.number_of_active_notifications() < 3 {
+        //     let mut notification = Notification::new(
+        //         format!("({elapsed_time}) New notification"),
+        //         "This is a new notification from bell!".to_owned(),
+        //     );
 
-        if time_now.elapsed().as_secs() >= 2 && !created_notification {
-            let mut new_notification = Notification::new(
-                "New new notification".to_owned(),
-                "This is a newer new notification from bell!".to_owned(),
-            );
-            for output_name in global_data.get_mut().outputs.keys() {
-                let specifier = configuration.get_output_configuration(output_name);
-                new_notification.add_output(output_name, specifier);
-            }
-            new_notification.create_surfaces(global_data.get_mut());
+        //     notification.try_make_surfaces(&configuration);
+        //     notification_manager.add_notification(notification);
 
-            notification_manager.add_notification(new_notification);
+        //     n_notification = elapsed_time;
+        // }
 
-            created_notification = true;
-        }
+        let event_queue = {
+            let mut wayland_state = wayland::wayland_state_write();
+            let trigger_queue = wayland_state.consume_trigger_events();
 
-        if time_now.elapsed().as_secs() >= 5 {
-            notification_manager.remove_by_index(1);
-            notification_manager.remove_by_index(0);
-        }
+            trigger_queue
+                .map(|(id, trigger_list)| (id, trigger_list.iter().map(&event_handler).collect()))
+                .collect()
+        };
 
-        let manager_callback =
-            |surface_id: &backend::ObjectId,
-             notification: &Notification,
-             offset_per_output: &mut HashMap<String, i32>| {
-                process_surface(
-                    &mut global_data,
-                    &mut renderers_for_surfaces,
-                    offset_per_output,
-                    notification,
-                    surface_id,
-                )
-            };
-
-        notification_manager.process_active_notifications(manager_callback);
+        notification_manager.process_active_notifications(&event_queue, &mut manager_callback);
 
         socket_handler.handle(50);
     }

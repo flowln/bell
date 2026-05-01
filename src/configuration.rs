@@ -4,7 +4,7 @@ use serde::de::Visitor;
 use serde::Deserialize;
 use toml;
 
-use crate::backend::{Anchor, Layer};
+use crate::wayland::{Anchor, Layer};
 use crate::render::Color;
 
 #[macro_export]
@@ -176,11 +176,32 @@ impl Default for OutputConfiguration {
     }
 }
 
+#[derive(Debug, Deserialize, Eq, PartialEq, Hash)]
+pub enum EventTrigger {
+    #[serde(rename = "left-click")]
+    OnLeftClick,
+    #[serde(rename = "right-click")]
+    OnRightClick,
+    #[serde(rename = "middle-click")]
+    OnMiddleClick,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+pub enum EventResponse {
+    #[serde(rename = "close-notification")]
+    CloseNotification,
+    #[serde(rename = "nothing")]
+    Nothing,
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct Configuration {
     #[serde(flatten)]
     #[serde(default)]
     default_output_config: OutputConfiguration,
+
+    #[serde(default)]
+    events: HashMap<EventTrigger, EventResponse>,
 
     #[serde(default)]
     outputs: HashMap<String, OutputConfiguration>,
@@ -261,6 +282,10 @@ impl Configuration {
             Some(output_configuration) => output_configuration,
             None => &self.default_output_config,
         }
+    }
+
+    pub fn get_event_handler(&self) -> impl Fn(&EventTrigger) -> EventResponse {
+        move |trigger: &EventTrigger| *self.events.get(trigger).unwrap_or(&EventResponse::Nothing)
     }
 
     fn populate_outputs_with_default(&mut self) {
@@ -458,4 +483,27 @@ fn test_default_output_with_override() {
     // per-output configuration still give their default value.
     assert!(output_spec.layer.is_some());
     assert_eq!(output_spec.layer.unwrap(), Layer::Top);
+}
+
+#[test]
+fn test_event_handler() {
+    let file_contents = r#"
+        [events]
+        left-click = "nothing"
+        right-click = "close-notification"
+    "#
+    .to_owned();
+
+    let configuration = Configuration::from_string(&file_contents);
+
+    if let Err(error) = configuration {
+        panic!("{}", error.to_string());
+    }
+
+    let configuration = configuration.unwrap();
+    let event_handler = configuration.get_event_handler();
+
+    assert_eq!(event_handler(&EventTrigger::OnLeftClick), EventResponse::Nothing);
+    assert_eq!(event_handler(&EventTrigger::OnRightClick), EventResponse::CloseNotification);
+    assert_eq!(event_handler(&EventTrigger::OnMiddleClick), EventResponse::Nothing);
 }

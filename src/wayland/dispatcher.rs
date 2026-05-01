@@ -1,44 +1,74 @@
 pub mod dispatcher {
-    use wayland_client::{protocol::wl_registry, Connection, Dispatch, Proxy, QueueHandle};
+    use std::sync::RwLock;
+
+    use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, protocol::wl_registry};
 
     use wayland_client::backend::ObjectId;
     use wayland_client::protocol::wl_buffer::WlBuffer;
+    use wayland_client::protocol::wl_callback::WlCallback;
     use wayland_client::protocol::wl_compositor::WlCompositor;
     use wayland_client::protocol::wl_output::WlOutput;
+    use wayland_client::protocol::wl_pointer::WlPointer;
+    use wayland_client::protocol::wl_seat::{Capability, WlSeat};
     use wayland_client::protocol::wl_shm::WlShm;
     use wayland_client::protocol::wl_surface::WlSurface;
 
     use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1;
     use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrLayerSurfaceV1;
 
-    use crate::wayland::wayland::GlobalData;
+    use crate::wayland::WaylandState;
 
     pub struct UserData;
     #[derive(Debug)]
     pub struct BufferUserData {
         pub parent_id: Option<ObjectId>,
     }
+    pub struct DisplayUserData;
     pub struct WlrUserData {
         pub parent_id: ObjectId,
     }
-    pub struct SurfaceUserData {
-        pub parent_id: ObjectId,
+    pub struct WlOutputUserData;
+    pub struct PointerUserData {
+        current_surface: RwLock<Option<(u32, ObjectId)>>,
     }
     pub struct WlSurfaceUserData;
-    pub struct WlOutputUserData;
+    pub struct SeatUserData {
+        pointers: RwLock<Vec<WlPointer>>,
+    }
+
+    pub use wayland_client::protocol::wl_pointer::ButtonState;
+    // Ref.: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/tree/include/uapi/linux/input-event-codes.h?h=v7.0.2#n356
+    #[repr(u32)]
+    pub enum LinuxButtonCode {
+        Unknown(u32),
+        Left = 0x110,
+        Right = 0x111,
+        Middle = 0x112,
+    }
+
+    impl From<u32> for LinuxButtonCode {
+        fn from(data: u32) -> LinuxButtonCode {
+            match data {
+                0x110 => LinuxButtonCode::Left,
+                0x111 => LinuxButtonCode::Right,
+                0x112 => LinuxButtonCode::Middle,
+                _ => LinuxButtonCode::Unknown(data),
+            }
+        }
+    }
 
     fn binds_on<I: Proxy + 'static>(interface: &String) -> bool {
         interface == I::interface().name
     }
 
-    impl Dispatch<wl_registry::WlRegistry, ()> for GlobalData {
+    impl Dispatch<wl_registry::WlRegistry, ()> for WaylandState {
         fn event(
             state: &mut Self,
             registry: &wl_registry::WlRegistry,
             event: wl_registry::Event,
             _: &(),
             _: &Connection,
-            queue_handle: &QueueHandle<GlobalData>,
+            queue_handle: &QueueHandle<WaylandState>,
         ) {
             match event {
                 wl_registry::Event::Global {
@@ -52,6 +82,18 @@ pub mod dispatcher {
                     } else if binds_on::<WlOutput>(&interface) {
                         let _: WlOutput =
                             registry.bind(name, version, queue_handle, WlOutputUserData {});
+
+                        // We'll be waiting on the server providing output information
+                        state.pending_data_amount += 1;
+                    } else if binds_on::<WlSeat>(&interface) {
+                        state.seats.push(registry.bind(
+                            name,
+                            version,
+                            queue_handle,
+                            SeatUserData {
+                                pointers: RwLock::new(Vec::new()),
+                            },
+                        ));
                     } else if binds_on::<WlShm>(&interface) {
                         state.shared_memory =
                             Some(registry.bind(name, version, queue_handle, UserData {}));
@@ -70,34 +112,47 @@ pub mod dispatcher {
         }
     }
 
-    impl<I: Proxy> Dispatch<I, UserData> for GlobalData {
+    impl<I: Proxy> Dispatch<I, UserData> for WaylandState {
         fn event(
-            _state: &mut GlobalData,
+            _state: &mut WaylandState,
             _proxy: &I,
             _event: <I as Proxy>::Event,
             _data: &UserData,
             _conn: &Connection,
-            _qhandle: &QueueHandle<GlobalData>,
+            _qhandle: &QueueHandle<WaylandState>,
         ) {
             println!("{_proxy:?}");
         }
     }
 
-    impl Dispatch<ZwlrLayerSurfaceV1, WlrUserData> for GlobalData {
+    impl Dispatch<WlCallback, DisplayUserData> for WaylandState {
         fn event(
-            state: &mut GlobalData,
+            state: &mut WaylandState,
+            _proxy: &WlCallback,
+            _event: <WlCallback as Proxy>::Event,
+            _data: &DisplayUserData,
+            _conn: &Connection,
+            _qhandle: &QueueHandle<WaylandState>,
+        ) {
+            state.pending_data_amount -= 1;
+        }
+    }
+
+    impl Dispatch<ZwlrLayerSurfaceV1, WlrUserData> for WaylandState {
+        fn event(
+            state: &mut WaylandState,
             proxy: &ZwlrLayerSurfaceV1,
             event: <ZwlrLayerSurfaceV1 as Proxy>::Event,
             data: &WlrUserData,
             _conn: &Connection,
-            _qhandle: &QueueHandle<GlobalData>,
+            _qhandle: &QueueHandle<WaylandState>,
         ) {
             type EventType = <ZwlrLayerSurfaceV1 as Proxy>::Event;
             match event {
                 EventType::Configure {
                     serial,
-                    width,
-                    height,
+                    width: _,
+                    height: _,
                 } => {
                     proxy.ack_configure(serial);
 
@@ -117,14 +172,14 @@ pub mod dispatcher {
         }
     }
 
-    impl Dispatch<WlBuffer, BufferUserData> for GlobalData {
+    impl Dispatch<WlBuffer, BufferUserData> for WaylandState {
         fn event(
-            state: &mut GlobalData,
+            state: &mut WaylandState,
             _proxy: &WlBuffer,
             event: <WlBuffer as Proxy>::Event,
             data: &BufferUserData,
             _conn: &Connection,
-            queue_handle: &QueueHandle<GlobalData>,
+            queue_handle: &QueueHandle<WaylandState>,
         ) {
             type EventType = <WlBuffer as Proxy>::Event;
             match event {
@@ -146,25 +201,131 @@ pub mod dispatcher {
         }
     }
 
-    impl Dispatch<WlSurface, WlSurfaceUserData> for GlobalData {
+    impl Dispatch<WlPointer, PointerUserData> for WaylandState {
         fn event(
-            state: &mut GlobalData,
+            wayland_state: &mut WaylandState,
+            _proxy: &WlPointer,
+            event: <WlPointer as Proxy>::Event,
+            data: &PointerUserData,
+            _conn: &Connection,
+            _qhandle: &QueueHandle<WaylandState>,
+        ) {
+            type EventType = <WlPointer as Proxy>::Event;
+            match event {
+                EventType::Enter {
+                    serial,
+                    surface,
+                    surface_x: _,
+                    surface_y: _,
+                } => {
+                    let mut current_state = data.current_surface.write().unwrap();
+                    current_state.replace((serial, surface.id()));
+                }
+                EventType::Leave { serial, surface } => {
+                    let mut current_state = data.current_surface.write().unwrap();
+
+                    match &*current_state {
+                        Some((old_serial, old_surface_id)) => {
+                            if serial > *old_serial && surface.id() == *old_surface_id {
+                                current_state.take();
+                            } else {
+                                eprintln!(
+                                    "WlPointer: Invalid leave event received - Old: {} {} | Received: {} {}",
+                                    old_serial,
+                                    old_surface_id,
+                                    serial,
+                                    surface.id()
+                                );
+                            }
+                        }
+                        None => {
+                            eprintln!(
+                                "WlPointer: Left a surface (id: {}) without entering it first.",
+                                surface.id()
+                            );
+                        }
+                    }
+                }
+                EventType::Button { serial, time: _, button, state } => {
+                    let current_state_opt = data.current_surface.read().unwrap();
+
+                    if let Some(current_state) = &*current_state_opt && serial > current_state.0 {
+                        if let Ok(state) = state.into_result() {
+                            wayland_state.with_surface(&current_state.1, |wl_state, surface| {
+                                surface.handle_pointer_event(wl_state, LinuxButtonCode::from(button), state);
+                            });
+                        } else {
+                            eprintln!("WlPointer: Invalid button state: {:?}", state);
+                        }
+                    } else {
+                        eprintln!("WlPointer: Invalid button event received.");
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    impl Dispatch<WlSeat, SeatUserData> for WaylandState {
+        fn event(
+            _state: &mut WaylandState,
+            proxy: &WlSeat,
+            event: <WlSeat as Proxy>::Event,
+            data: &SeatUserData,
+            _conn: &Connection,
+            queue_handle: &QueueHandle<WaylandState>,
+        ) {
+            type EventType = <WlSeat as Proxy>::Event;
+            match event {
+                EventType::Capabilities { capabilities } => {
+                    let capabilities: Capability = match capabilities.into_result() {
+                        Ok(caps) => caps,
+                        Err(error) => {
+                            eprintln!(
+                                "WlSeat: Error handling capabilities input: {}",
+                                error.to_string()
+                            );
+                            Capability::empty()
+                        }
+                    };
+
+                    let mut pointers = data.pointers.write().unwrap();
+                    if capabilities.intersects(Capability::Pointer) {
+                        pointers.push(proxy.get_pointer(
+                            queue_handle,
+                            PointerUserData {
+                                current_surface: RwLock::new(None),
+                            },
+                        ));
+                    } else {
+                        while let Some(pointer) = pointers.pop() {
+                            pointer.release();
+                        }
+                    }
+                }
+                EventType::Name { name } => {
+                    println!("WlSeat: Registered seat with name '{name}'");
+                }
+                _ => {
+                    unreachable!()
+                }
+            }
+        }
+    }
+
+    impl Dispatch<WlSurface, WlSurfaceUserData> for WaylandState {
+        fn event(
+            state: &mut WaylandState,
             proxy: &WlSurface,
             event: <WlSurface as Proxy>::Event,
             _data: &WlSurfaceUserData,
             _conn: &Connection,
-            queue_handle: &QueueHandle<GlobalData>,
+            _qhandle: &QueueHandle<WaylandState>,
         ) {
             type EventType = <WlSurface as Proxy>::Event;
             match event {
                 EventType::PreferredBufferScale { factor } => {
-                    if let Some(surface) = state.surfaces.get_mut(&proxy.id()) {
-                        surface.set_buffer_scale(
-                            factor,
-                            state.shared_memory.as_mut().unwrap(),
-                            queue_handle,
-                        );
-                    }
+                    state.with_surface(&proxy.id(), |wl_state, surface| surface.set_buffer_scale(wl_state, factor)).unwrap();
                 }
                 _ => {
                     println!("WlSurface: {:?}", event);
@@ -173,19 +334,22 @@ pub mod dispatcher {
         }
     }
 
-    impl Dispatch<WlOutput, WlOutputUserData> for GlobalData {
+    impl Dispatch<WlOutput, WlOutputUserData> for WaylandState {
         fn event(
-            state: &mut GlobalData,
+            state: &mut WaylandState,
             proxy: &WlOutput,
             event: <WlOutput as Proxy>::Event,
             _data: &WlOutputUserData,
             _conn: &Connection,
-            _qhandle: &QueueHandle<GlobalData>,
+            _qhandle: &QueueHandle<WaylandState>,
         ) {
             type EventType = <WlOutput as Proxy>::Event;
             match event {
                 EventType::Name { name } => {
-                    state.outputs.insert(name, proxy.clone());
+                    state.add_output(name, proxy.clone());
+                }
+                EventType::Done => {
+                    state.pending_data_amount -= 1;
                 }
                 _ => {
                     println!("WlOutput: {:?}", event);
