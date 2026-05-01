@@ -163,7 +163,7 @@ pub mod dispatcher {
                     }
                 }
                 EventType::Closed => {
-                    state.destroy_surface(&data.parent_id);
+                    state.mark_surface_for_destruction(&data.parent_id);
                 }
                 _ => {
                     unreachable!()

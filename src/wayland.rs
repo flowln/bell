@@ -218,6 +218,8 @@ pub enum SurfaceBackend {
 
 pub struct Surface {
     id: SurfaceID,
+
+    destruction_scheduled: bool,
     destroyed: bool,
 
     wl_surface: WlSurface,
@@ -280,6 +282,7 @@ impl Surface {
 
         Surface {
             id,
+            destruction_scheduled: false,
             destroyed: false,
             wl_surface,
             backend: surface_backend,
@@ -346,20 +349,17 @@ impl Surface {
         }
     }
 
-    pub fn destroy(&mut self) {
+    /// Mark surface for destruction on the next draw.
+    pub fn destroy_later(&mut self) {
         if self.destroyed {
             return;
         }
 
-        match &mut self.backend {
-            SurfaceBackend::Wlr(surface) => {
-                surface.destroy();
-            }
-        }
+        self.destruction_scheduled = true;
+    }
 
-        self.wl_surface.destroy();
-
-        self.destroyed = true;
+    pub fn will_destroy_later(&self) -> bool {
+        self.destruction_scheduled
     }
 
     pub fn is_destroyed(&self) -> bool {
@@ -433,6 +433,12 @@ impl Surface {
     }
 
     fn draw(&mut self) {
+        if self.destruction_scheduled {
+            self.destroy_now();
+
+            return;
+        }
+
         self.wl_surface.damage_buffer(
             0,
             0,
@@ -447,6 +453,27 @@ impl Surface {
         self.wl_surface.commit();
 
         self.is_dirty = false;
+    }
+
+    fn destroy_now(&mut self) {
+        match &mut self.backend {
+            SurfaceBackend::Wlr(surface) => {
+                surface.destroy();
+            }
+        }
+
+        self.wl_surface.destroy();
+
+        self.destruction_scheduled = false;
+        self.destroyed = true;
+    }
+}
+
+impl Drop for Surface {
+    fn drop(&mut self) {
+        if !self.destroyed {
+            self.destroy_now();
+        }
     }
 }
 
@@ -619,17 +646,22 @@ impl WaylandState {
         Some(())
     }
 
-    pub fn destroy_surface(&mut self, id: &SurfaceID) {
-        let surface_maybe = self.surfaces.get_mut().unwrap().remove(id);
+    pub fn mark_surface_for_destruction(&mut self, id: &SurfaceID) {
+        let surface_maybe = self.surfaces.get_mut().unwrap().get_mut(id);
 
         match surface_maybe {
-            Some(mut surface) => {
-                surface.destroy();
+            Some(surface) => {
+                surface.destroy_later();
 
                 self.dirty_all_surfaces();
             }
             None => {}
         }
+    }
+
+    pub fn destroy_scheduled_surfaces(&mut self) {
+        // Remove the reference so the Surface object is dropped.
+        self.surfaces.get_mut().unwrap().retain(|_, surface| !surface.will_destroy_later());
     }
 
     fn dirty_all_surfaces(&mut self) {

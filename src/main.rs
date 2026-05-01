@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::time;
 
 use wayland_client::Connection;
 use wayland_client::backend::ObjectId;
@@ -89,6 +88,7 @@ fn process_surface(
     }
 
     let output_name = surface.output_name.clone();
+    let will_destroy = surface.will_destroy_later();
 
     let output_spec = notification.get_output_spec(&output_name).unwrap();
     let try_rendering = |offset: i32| {
@@ -129,12 +129,16 @@ fn process_surface(
         Some(())
     };
 
-    if !offset_per_output.contains_key(&output_name) {
-        offset_per_output.insert(output_name.clone(), 0);
-    }
-    let offset = offset_per_output.get_mut(&output_name).unwrap();
+    // We'll destroy it at the end of the current cycle, but for now we keep it alive so
+    // that it correctly transfers surface focus when unmapping.
+    if !will_destroy {
+        if !offset_per_output.contains_key(&output_name) {
+            offset_per_output.insert(output_name.clone(), 0);
+        }
+        let offset = offset_per_output.get_mut(&output_name).unwrap();
 
-    with_offset(offset, output_spec, try_rendering);
+        with_offset(offset, output_spec, try_rendering);
+    }
 
     return SurfaceProcessingOutput::Continue;
 }
@@ -187,8 +191,6 @@ fn main() {
             )
         };
 
-    let mut n_notification = 1;
-
     for x in 0..3 {
         let mut notification = Notification::new(
             format!("({x}) New notification"),
@@ -199,21 +201,7 @@ fn main() {
         notification_manager.add_notification(notification);
     }
 
-    let start_time = std::time::Instant::now();
     while notification_manager.is_active() {
-        // let elapsed_time = start_time.elapsed().as_secs();
-        // if elapsed_time > n_notification && notification_manager.number_of_active_notifications() < 3 {
-        //     let mut notification = Notification::new(
-        //         format!("({elapsed_time}) New notification"),
-        //         "This is a new notification from bell!".to_owned(),
-        //     );
-
-        //     notification.try_make_surfaces(&configuration);
-        //     notification_manager.add_notification(notification);
-
-        //     n_notification = elapsed_time;
-        // }
-
         let event_queue = {
             let mut wayland_state = wayland::wayland_state_write();
             let trigger_queue = wayland_state.consume_trigger_events();
@@ -224,6 +212,11 @@ fn main() {
         };
 
         notification_manager.process_active_notifications(&event_queue, &mut manager_callback);
+
+        {
+            let mut wayland_state = wayland::wayland_state_write();
+            wayland_state.destroy_scheduled_surfaces();
+        }
 
         socket_handler.handle(50);
     }

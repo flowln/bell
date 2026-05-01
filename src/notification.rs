@@ -96,7 +96,7 @@ impl<'n> Notification<'n> {
         self.surface_ids.retain(|id| id != surface_id);
 
         let mut wayland_state = wayland_state_write();
-        wayland_state.destroy_surface(surface_id);
+        wayland_state.mark_surface_for_destruction(surface_id);
     }
 
     pub fn has_any_surface(&self) -> bool {
