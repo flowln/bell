@@ -1,26 +1,38 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use wayland_client::Connection;
 use wayland_client::backend::ObjectId;
 
 mod configuration;
+mod dbus;
+mod lock;
 mod notification;
 mod render;
+mod signal;
 mod wayland;
 
 use configuration::Configuration;
+use crate::dbus as _dbus;
 use render::Color;
 use render::render::Renderer;
 
 use configuration::{GrowthDirection, OutputConfiguration};
-use notification::{Notification, NotificationManager, SurfaceProcessingOutput};
+use notification::{Notification, SurfaceProcessingOutput, notification_manager_read, notification_manager_write};
+
+
+static EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
+unsafe fn sigint_handler() {
+    EXIT_REQUESTED.store(true, Ordering::Relaxed);
+}
+
 
 fn render(renderer: &mut Renderer, notification: &Notification, spec: &OutputConfiguration) {
     let mut text_opts = render::text::TextRenderOptions::new();
     text_opts.font_size = 20.;
 
     renderer.draw_text(
-        &notification.title,
+        &notification.app_name,
         10,
         30,
         Color::rgba(0x00, 0x00, 0x00, 0xFF),
@@ -31,7 +43,7 @@ fn render(renderer: &mut Renderer, notification: &Notification, spec: &OutputCon
     text_opts.font_size = 12.;
 
     renderer.draw_text(
-        &notification.message,
+        &notification.summary,
         10,
         80,
         Color::rgba(0xFF, 0xFF, 0xFF, 0xFF),
@@ -155,6 +167,13 @@ fn main() {
     let configuration = configuration.unwrap_or_default();
     let event_handler = configuration.get_event_handler();
 
+    {
+        let mut notification_manager = notification_manager_write();
+        notification_manager.set_configuration(configuration);
+    }
+
+    let dbus_connection = _dbus::create_server().unwrap();
+
     let mut event_queue = {
         let conn = Connection::connect_to_env().unwrap();
 
@@ -176,7 +195,6 @@ fn main() {
     };
 
     let mut socket_handler = wayland::SocketManager::new(&mut event_queue);
-    let mut notification_manager = NotificationManager::new();
     let mut renderers_for_surfaces = HashMap::<wayland::SurfaceID, Renderer>::new();
 
     let mut manager_callback =
@@ -191,17 +209,10 @@ fn main() {
             )
         };
 
-    for x in 0..3 {
-        let mut notification = Notification::new(
-            format!("({x}) New notification"),
-            "This is a new notification from bell!".to_owned(),
-        );
 
-        notification.try_make_surfaces(&configuration);
-        notification_manager.add_notification(notification);
-    }
+    signal::install_signal_handler(signal::PosixSignal::SIGINT, sigint_handler);
 
-    while notification_manager.is_active() {
+    while !EXIT_REQUESTED.load(Ordering::Relaxed) {
         let event_queue = {
             let mut wayland_state = wayland::wayland_state_write();
             let trigger_queue = wayland_state.consume_trigger_events();
@@ -211,7 +222,10 @@ fn main() {
                 .collect()
         };
 
-        notification_manager.process_active_notifications(&event_queue, &mut manager_callback);
+        {
+            let mut notification_manager = notification_manager_write();
+            notification_manager.process_active_notifications(&event_queue, &mut manager_callback);
+        }
 
         {
             let mut wayland_state = wayland::wayland_state_write();
@@ -219,5 +233,6 @@ fn main() {
         }
 
         socket_handler.handle(50);
+        dbus_connection.process(std::time::Duration::from_millis(50)).unwrap();
     }
 }

@@ -1,11 +1,14 @@
 use std::collections::HashMap;
+use std::fmt;
+use std::sync::Arc;
 
-use serde::de::Visitor;
 use serde::Deserialize;
+use serde::de::{MapAccess, Visitor};
 use toml;
 
-use crate::wayland::{Anchor, Layer};
+use crate::notification::notification_manager_write;
 use crate::render::Color;
+use crate::wayland::{Anchor, Layer};
 
 #[macro_export]
 macro_rules! with_change {
@@ -142,9 +145,7 @@ pub struct OutputConfiguration {
 
 #[macro_export]
 macro_rules! with_other {
-    ( $self:expr,$other:expr,$field:ident ) => {{
-        $self.$field = $self.$field.or($other.$field)
-    }};
+    ( $self:expr,$other:expr,$field:ident ) => {{ $self.$field = $self.$field.or($other.$field) }};
 }
 impl OutputConfiguration {
     pub fn complete_missing(&mut self, other: &OutputConfiguration) {
@@ -176,7 +177,7 @@ impl Default for OutputConfiguration {
     }
 }
 
-#[derive(Debug, Deserialize, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Hash)]
 pub enum EventTrigger {
     #[serde(rename = "left-click")]
     OnLeftClick,
@@ -194,17 +195,57 @@ pub enum EventResponse {
     Nothing,
 }
 
+struct OutputsVisitor;
+impl<'de> Visitor<'de> for OutputsVisitor {
+    type Value = HashMap<String, Arc<OutputConfiguration>>;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a map of output names to pointers to configuration")
+    }
+
+    fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
+    where
+        M: MapAccess<'de>,
+    {
+        let mut map = HashMap::with_capacity(access.size_hint().unwrap_or(0));
+
+        while let Some((key, value)) = access.next_entry()? {
+            map.insert(key, Arc::new(value));
+        }
+
+        Ok(map)
+    }
+}
+fn deserialize_outputs<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, Arc<OutputConfiguration>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserializer.deserialize_map(OutputsVisitor)
+}
+
+fn deserialize_arc<'de, D, T>(deserializer: D) -> Result<Arc<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Deserialize::deserialize(deserializer).map(|input: T| Arc::new(input))
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct Configuration {
     #[serde(flatten)]
     #[serde(default)]
-    default_output_config: OutputConfiguration,
+    #[serde(deserialize_with = "deserialize_arc")]
+    default_output_config: Arc<OutputConfiguration>,
 
     #[serde(default)]
     events: HashMap<EventTrigger, EventResponse>,
 
     #[serde(default)]
-    outputs: HashMap<String, OutputConfiguration>,
+    #[serde(deserialize_with = "deserialize_outputs")]
+    outputs: HashMap<String, Arc<OutputConfiguration>>,
 }
 
 const ENV_VARIABLES: [&'static str; 2] = ["XDG_CONFIG_HOME", "HOME"];
@@ -277,22 +318,26 @@ impl Configuration {
         }
     }
 
-    pub fn get_output_configuration(&self, output_name: &str) -> &OutputConfiguration {
+    pub fn get_output_configuration(&self, output_name: &str) -> Arc<OutputConfiguration> {
         match self.outputs.get(output_name) {
-            Some(output_configuration) => output_configuration,
-            None => &self.default_output_config,
+            Some(output_configuration) => Arc::clone(output_configuration),
+            None => Arc::clone(&self.default_output_config),
         }
     }
 
-    pub fn get_event_handler(&self) -> impl Fn(&EventTrigger) -> EventResponse {
-        move |trigger: &EventTrigger| *self.events.get(trigger).unwrap_or(&EventResponse::Nothing)
+    pub fn get_event_handler(&self) -> impl Fn(&EventTrigger) -> EventResponse + use<> {
+        let event_translator = self.events.clone();
+        move |trigger: &EventTrigger| *event_translator.get(trigger).unwrap_or(&EventResponse::Nothing)
     }
 
     fn populate_outputs_with_default(&mut self) {
-        self.default_output_config
+        Arc::get_mut(&mut self.default_output_config)
+            .unwrap()
             .complete_missing(&OutputConfiguration::default());
         for output_configuration in self.outputs.values_mut() {
-            output_configuration.complete_missing(&self.default_output_config);
+            Arc::get_mut(output_configuration)
+                .unwrap()
+                .complete_missing(&self.default_output_config);
         }
     }
 }
@@ -503,7 +548,16 @@ fn test_event_handler() {
     let configuration = configuration.unwrap();
     let event_handler = configuration.get_event_handler();
 
-    assert_eq!(event_handler(&EventTrigger::OnLeftClick), EventResponse::Nothing);
-    assert_eq!(event_handler(&EventTrigger::OnRightClick), EventResponse::CloseNotification);
-    assert_eq!(event_handler(&EventTrigger::OnMiddleClick), EventResponse::Nothing);
+    assert_eq!(
+        event_handler(&EventTrigger::OnLeftClick),
+        EventResponse::Nothing
+    );
+    assert_eq!(
+        event_handler(&EventTrigger::OnRightClick),
+        EventResponse::CloseNotification
+    );
+    assert_eq!(
+        event_handler(&EventTrigger::OnMiddleClick),
+        EventResponse::Nothing
+    );
 }

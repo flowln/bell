@@ -3,39 +3,33 @@ use crate::wayland::{
     SurfaceBackend, SurfaceID, wayland_state_read, wayland_state_write,
 };
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::{LazyLock, RwLock, Arc};
 
-pub struct Notification<'n> {
-    pub title: String,
-    pub message: String,
+pub struct Notification {
+    pub app_name: String,
+    pub summary: String,
+    pub body: String,
 
     pub is_dirty: bool,
 
-    outputs: HashMap<String, &'n OutputConfiguration>,
+    outputs: HashMap<String, Arc<OutputConfiguration>>,
     surface_ids: Vec<SurfaceID>,
 }
 
-impl<'n> Notification<'n> {
-    pub fn new(title: String, message: String) -> Notification<'n> {
+impl Notification {
+    pub fn new(app_name: String, summary: String, body: Option<String>) -> Notification {
         Notification {
-            title,
-            message,
+            app_name,
+            summary,
+            body: body.unwrap_or_default(),
             is_dirty: true,
             outputs: HashMap::new(),
             surface_ids: Vec::new(),
         }
     }
 
-    pub fn set_message(&mut self, message: String) {
-        if message == self.message {
-            return;
-        }
-
-        self.message = message;
-        self.is_dirty = true;
-    }
-
-    pub fn try_make_surfaces(&mut self, configuration: &'n Configuration) -> Option<()> {
+    pub fn try_make_surfaces(&mut self, configuration: &Configuration) -> Option<()> {
         {
             let r_wayland_state = wayland_state_read();
             let available_output_names = r_wayland_state.get_output_names();
@@ -122,7 +116,7 @@ impl<'n> Notification<'n> {
     }
 
     pub fn get_output_spec(&self, output_name: &String) -> Option<&OutputConfiguration> {
-        self.outputs.get(output_name).map(|&c| c)
+        self.outputs.get(output_name).map(|c| unsafe{ &*Arc::as_ptr(c) })
     }
 
     fn expire(&mut self) {
@@ -132,7 +126,7 @@ impl<'n> Notification<'n> {
         }
     }
 
-    fn try_add_output(&mut self, output_name: &String, spec: &'n OutputConfiguration) {
+    fn try_add_output(&mut self, output_name: &String, spec: Arc<OutputConfiguration>) {
         self.outputs.insert(output_name.clone(), spec);
     }
 }
@@ -143,23 +137,43 @@ pub enum SurfaceProcessingOutput {
     SurfaceDestroyed,
 }
 
-pub struct NotificationManager<'m> {
-    active_notifications: Vec<Notification<'m>>,
+pub static NOTIFICATION_MANAGER: RwLock<NotificationManager> = RwLock::new(NotificationManager::new());
+
+use crate::{generate_rw_accessors};
+generate_rw_accessors!(NOTIFICATION_MANAGER NOTIFICATION_WRITE_BACKTRACE notification_manager_read notification_manager_write notification_manager_panic NotificationManager);
+
+pub struct NotificationManager {
+    biggest_id_given: u32,
+
+    active_configuration: Option<Configuration>,
+    active_notifications: LazyLock<BTreeMap<u32, Notification>>,
 }
 
-impl<'m> NotificationManager<'m> {
-    pub fn new() -> NotificationManager<'m> {
+impl NotificationManager {
+    const fn new() -> NotificationManager {
         NotificationManager {
-            active_notifications: Vec::new(),
+            biggest_id_given: 0,
+            active_configuration: None,
+            active_notifications: LazyLock::new(|| BTreeMap::new()),
         }
     }
 
-    pub fn add_notification(&mut self, notification: Notification<'m>) {
-        self.active_notifications.push(notification)
+    pub fn set_configuration(&mut self, configuration: Configuration) {
+        self.active_configuration = Some(configuration);
     }
 
-    pub fn number_of_active_notifications(&self) -> usize {
-        self.active_notifications.len()
+    pub fn get_configuration(&mut self) -> Option<&Configuration> {
+        self.active_configuration.as_ref()
+    }
+
+    pub fn add_notification(&mut self, notification: Notification) -> u32 {
+        self.biggest_id_given += 1;
+        self.active_notifications.insert(self.biggest_id_given, notification);
+        self.biggest_id_given
+    }
+
+    pub fn replace_notification(&mut self, id: u32, notification: Notification) {
+        self.active_notifications.insert(id, notification);
     }
 
     pub fn is_active(&self) -> bool {
@@ -170,14 +184,14 @@ impl<'m> NotificationManager<'m> {
         &mut self,
         event_queue: &HashMap<SurfaceID, Vec<EventResponse>>,
         process_surface: &mut F,
-    ) -> Vec<Notification<'_>>
+    ) -> Vec<Notification>
     where
         F: FnMut(&SurfaceID, &Notification, &mut HashMap<String, i32>) -> SurfaceProcessingOutput,
     {
-        let mut indexes_to_remove = Vec::<usize>::new();
+        let mut ids_to_remove = Vec::<u32>::new();
         let mut offset_per_output = HashMap::<String, i32>::new();
 
-        for (idx, notification) in self.active_notifications.iter_mut().enumerate().rev() {
+        for (id, notification) in self.active_notifications.iter_mut() {
             let mut surfaces_to_delete = Vec::<SurfaceID>::new();
 
             notification.for_each_surface_mut(|notif, surface_id| {
@@ -207,15 +221,15 @@ impl<'m> NotificationManager<'m> {
             }
 
             if !notification.has_any_surface() {
-                indexes_to_remove.push(idx);
+                ids_to_remove.push(*id);
             } else {
                 notification.is_dirty = false;
             }
         }
 
         let mut inactive_notifications = Vec::<Notification>::new();
-        for idx in indexes_to_remove {
-            inactive_notifications.push(self.active_notifications.remove(idx));
+        for id in ids_to_remove {
+            inactive_notifications.push(self.active_notifications.remove(&id).unwrap());
         }
 
         inactive_notifications

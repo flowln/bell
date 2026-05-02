@@ -1,10 +1,9 @@
 mod dispatcher;
 mod epoll;
 
-use std::backtrace::Backtrace;
 use std::collections::HashMap;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
-use std::sync::{OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
+use std::sync::{OnceLock, RwLock};
 
 use libc::{EEXIST, MAP_SHARED, O_CREAT, O_EXCL, O_RDWR, PROT_READ, PROT_WRITE, S_IRUSR, S_IWUSR};
 use libc::{c_void, off_t};
@@ -478,71 +477,9 @@ impl Drop for Surface {
 }
 
 static WAYLAND_STATE: RwLock<WaylandState> = RwLock::new(WaylandState::new());
-static WRITE_LOCK_BACKTRACE: RwLock<Option<Backtrace>> = RwLock::new(None);
 
-pub fn wayland_state_read() -> RwLockReadGuard<'static, WaylandState> {
-    match WAYLAND_STATE.try_read() {
-        Ok(guard) => guard,
-        Err(TryLockError::WouldBlock) => {
-            wayland_state_would_block_panic();
-        }
-        Err(TryLockError::Poisoned(error)) => {
-            panic!(
-                "Poisoned read lock while fetching wayland state: {}",
-                error.to_string()
-            );
-        }
-    }
-}
-
-pub fn wayland_state_write() -> RwLockWriteGuard<'static, WaylandState> {
-    match WAYLAND_STATE.try_write() {
-        Ok(guard) => {
-            WRITE_LOCK_BACKTRACE.try_write().unwrap().replace(Backtrace::capture());
-
-            guard
-        }
-        Err(TryLockError::WouldBlock) => {
-            wayland_state_would_block_panic();
-        }
-        Err(TryLockError::Poisoned(error)) => {
-            panic!(
-                "Poisoned write lock while fetching wayland state: {}",
-                error.to_string()
-            );
-        }
-    }
-}
-
-fn wayland_state_would_block_panic() -> ! {
-    let backtrace_opt = WRITE_LOCK_BACKTRACE.try_read().unwrap();
-
-    match backtrace_opt.as_ref() {
-        Some(backtrace) => {
-            let backtrace_str = backtrace.to_string();
-            let backtrace_split: Vec<&str> = backtrace_str.split('\n').collect();
-
-            let backtrace_trimmed = {
-                if backtrace_split.len() > 5 {
-                    backtrace_split[2..4].join("\n")
-                } else {
-                    backtrace_split.join("\n")
-                }
-            };
-
-            panic!(
-                "Unable to acquire lock while fetching wayland state. Last write lock acquisition place:\n\n{}\n\n",
-                backtrace_trimmed
-            );
-        }
-        None => {
-            panic!(
-                "Unable to acquire lock while fetching wayland state. No write lock backtrace is available.",
-            );
-            
-        }
-    };
-}
+use crate::{generate_rw_accessors};
+generate_rw_accessors!(WAYLAND_STATE WAYLAND_WRITE_BACKTRACE wayland_state_read wayland_state_write wayland_state_panic WaylandState);
 
 pub struct WaylandState {
     pub pending_data_amount: usize,
