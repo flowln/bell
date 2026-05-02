@@ -1,10 +1,11 @@
 use std::error::Error;
 
+use dbus::Message;
 use dbus::arg::PropMap;
 use dbus::blocking::Connection;
 use dbus_crossroads::{Context, Crossroads, MethodErr};
 
-use crate::notification::{Notification, notification_manager_write};
+use crate::notification::{Notification, NotificationCloseReason, NotificationError, notification_manager_write};
 
 #[macro_export]
 macro_rules! create_dbus_wrapper {
@@ -46,8 +47,8 @@ create_dbus_wrapper!(ServerInfoMessageOutput ServerInfoMessageOutputType DBUS_SE
 
 const CAPABILITIES: [&'static str; 1] = ["body"];
 
-const NOTIFICATION_BUS_NAME: &'static str = "org.freedesktop.Notifications";
-const NOTIFICATION_BUS_OBJECT_PATH: &'static str = "/org/freedesktop/Notifications";
+pub const NOTIFICATION_BUS_INTERFACE_NAME: &'static str = "org.freedesktop.Notifications";
+pub const NOTIFICATION_BUS_OBJECT_PATH: &'static str = "/org/freedesktop/Notifications";
 
 const SERVER_NAME: &'static str = env!("CARGO_PKG_NAME");
 const SERVER_VENDOR: &'static str = "Sofia & Bell";
@@ -56,13 +57,13 @@ const SERVER_SPEC_VERSION: &'static str = "1.3";
 
 struct DBusData;
 
-pub fn create_server() -> Result<Connection, Box<dyn Error>> {
+pub fn create_connection() -> Result<Connection, Box<dyn Error>> {
     let connection = Connection::new_session()?;
-    connection.request_name(NOTIFICATION_BUS_NAME, true, true, false)?;
+    connection.request_name(NOTIFICATION_BUS_INTERFACE_NAME, true, true, false)?;
 
     let mut crossroads = Crossroads::new();
 
-    let iface_token = crossroads.register(NOTIFICATION_BUS_NAME, |bus| {
+    let iface_token = crossroads.register(NOTIFICATION_BUS_INTERFACE_NAME, |bus| {
         bus.method(
             "GetCapabilities",
             (),
@@ -99,6 +100,20 @@ pub fn create_server() -> Result<Connection, Box<dyn Error>> {
                 Ok(reply)
             },
         );
+
+        bus.method(
+            "CloseNotification",
+            ("id",),
+            (),
+            move |_ctx: &mut Context, _data: &mut DBusData, (id,): (u32,)| {
+                let mut notification_manager = notification_manager_write();
+
+                match notification_manager.close_notification(id, NotificationCloseReason::Requested) {
+                    Ok(_) => Ok(()),
+                    Err(NotificationError::InvalidID) => Err(MethodErr::invalid_arg(&id)),
+                }
+            },
+        );
     });
 
     crossroads.insert(NOTIFICATION_BUS_OBJECT_PATH, &[iface_token], DBusData {});
@@ -113,6 +128,19 @@ pub fn create_server() -> Result<Connection, Box<dyn Error>> {
     Ok(connection)
 }
 
+pub fn emit_notification_closed(connection: &mut Connection, id: u32, reason: u32) -> Result<u32, ()>{
+    let mut message = Message::new_signal(
+        NOTIFICATION_BUS_OBJECT_PATH,
+        NOTIFICATION_BUS_INTERFACE_NAME,
+        "CloseNotification",
+    ).unwrap();
+
+    message.append_all((id, reason as u32));
+
+    connection.channel().send(message)
+}
+
+// Ref.: https://specifications.freedesktop.org/notification/latest/protocol.html#id-1.10.3.3.4
 fn handle_notify_message(
     _ctx: &mut Context,
     _data: &mut DBusData,
@@ -120,12 +148,27 @@ fn handle_notify_message(
 ) -> Result<u32, MethodErr> {
     let input = NotifyMessageInput::from(input);
 
-    let body = if input.body.len() != 0 {
-        Some(input.body)
-    } else {
-        None
+    let mut notification = Notification::new(input.app_name, input.summary, input.body);
+
+    // The timeout time in milliseconds since the display of the notification at which
+    // the notification should automatically close.
+    notification.expire_timeout = {
+        if input.expire_timeout < 0 {
+            // If -1, the notification's expiration time is dependent on the notification server's settings,
+            // and may vary for the type of notification.
+            todo!();
+        }
+        let timeout = input.expire_timeout as u64;
+
+        if timeout == 0 {
+            //  If 0, never expire.
+            None
+        } else {
+            Some(std::time::Duration::from_millis(
+                input.expire_timeout as u64,
+            ))
+        }
     };
-    let mut notification = Notification::new(input.app_name, input.summary, body);
 
     let mut notification_manager = notification_manager_write();
     let configuration = notification_manager
@@ -139,10 +182,15 @@ fn handle_notify_message(
             "Failed creating Wayland notification surfaces.",
         ))?;
 
+    // The optional notification ID that this notification replaces.
+    // The server must atomically (ie with no flicker or other visual cues) replace
+    // the given notification with this one.
     let mut id = input.replaces_id;
     if id == 0 {
+        // If replaces_id is 0, the return value is a UINT32 that represent the notification.
         id = notification_manager.add_notification(notification);
     } else {
+        // If replaces_id is not 0, the returned value is the same value as replaces_id.
         notification_manager.replace_notification(id, notification);
     }
 

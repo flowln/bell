@@ -18,9 +18,7 @@ use render::render::Renderer;
 use render::{Attrs, Metrics};
 
 use configuration::{GrowthDirection, OutputConfiguration};
-use notification::{
-    Notification, SurfaceProcessingOutput, notification_manager_read, notification_manager_write,
-};
+use notification::{Notification, SurfaceProcessingOutput, notification_manager_write};
 
 static EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 unsafe fn sigint_handler() {
@@ -191,7 +189,7 @@ fn main() {
         notification_manager.set_configuration(configuration);
     }
 
-    let dbus_connection = _dbus::create_server().unwrap();
+    let mut dbus_connection = _dbus::create_connection().unwrap();
 
     let mut event_queue = {
         let conn = Connection::connect_to_env().unwrap();
@@ -240,14 +238,18 @@ fn main() {
                 .collect()
         };
 
-        {
+        let closed_notifications = {
             let mut notification_manager = notification_manager_write();
-            notification_manager.process_active_notifications(&event_queue, &mut manager_callback);
-        }
+            notification_manager.process_active_notifications(&event_queue, &mut manager_callback)
+        };
 
         {
             let mut wayland_state = wayland::wayland_state_write();
             wayland_state.destroy_scheduled_surfaces();
+        }
+
+        for (id, reason) in closed_notifications {
+            _dbus::emit_notification_closed(&mut dbus_connection, id, reason as u32).unwrap();
         }
 
         socket_handler.handle(50);

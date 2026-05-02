@@ -3,6 +3,7 @@ use crate::wayland::{SurfaceBackend, SurfaceID, wayland_state_read, wayland_stat
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, LazyLock, RwLock};
+use std::time;
 
 pub struct Notification {
     pub app_name: String,
@@ -11,17 +12,22 @@ pub struct Notification {
 
     pub is_dirty: bool,
 
+    creation_time: time::Instant,
+    pub expire_timeout: Option<time::Duration>,
+
     outputs: HashMap<String, Arc<OutputConfiguration>>,
     surface_ids: Vec<SurfaceID>,
 }
 
 impl Notification {
-    pub fn new(app_name: String, summary: String, body: Option<String>) -> Notification {
+    pub fn new(app_name: String, summary: String, body: String) -> Notification {
         Notification {
             app_name,
             summary,
-            body: body.unwrap_or_default(),
+            body,
             is_dirty: true,
+            creation_time: time::Instant::now(),
+            expire_timeout: None,
             outputs: HashMap::new(),
             surface_ids: Vec::new(),
         }
@@ -119,6 +125,13 @@ impl Notification {
             .map(|c| unsafe { &*Arc::as_ptr(c) })
     }
 
+    pub fn has_timed_out(&self) -> bool {
+        match self.expire_timeout {
+            Some(timeout) => self.creation_time.elapsed() > timeout,
+            None => false,
+        }
+    }
+
     fn expire(&mut self) {
         let ids = self.surface_ids.clone();
         for id in ids.iter() {
@@ -137,6 +150,20 @@ pub enum SurfaceProcessingOutput {
     SurfaceDestroyed,
 }
 
+#[derive(Debug)]
+pub enum NotificationError {
+    InvalidID,
+}
+
+/// https://specifications.freedesktop.org/notification/latest/protocol.html#id-1.10.4.2.4
+#[derive(Clone, Copy)]
+pub enum NotificationCloseReason {
+    Expired = 1,
+    Dismissed = 2,
+    Requested = 3,
+    Undefined = 4,
+}
+
 pub static NOTIFICATION_MANAGER: RwLock<NotificationManager> =
     RwLock::new(NotificationManager::new());
 
@@ -148,6 +175,8 @@ pub struct NotificationManager {
 
     active_configuration: Option<Configuration>,
     active_notifications: LazyLock<BTreeMap<u32, Notification>>,
+
+    inactive_uncommited_notification_ids: Vec<(u32, NotificationCloseReason)>,
 }
 
 impl NotificationManager {
@@ -156,6 +185,7 @@ impl NotificationManager {
             biggest_id_given: 0,
             active_configuration: None,
             active_notifications: LazyLock::new(|| BTreeMap::new()),
+            inactive_uncommited_notification_ids: Vec::new(),
         }
     }
 
@@ -168,14 +198,33 @@ impl NotificationManager {
     }
 
     pub fn add_notification(&mut self, notification: Notification) -> u32 {
-        self.biggest_id_given += 1;
+        self.biggest_id_given = self.biggest_id_given.wrapping_add(1);
+        if self.biggest_id_given == 0 {
+            // From the dbus notification documentation:
+            //   Servers must make sure not to return zero as an ID.
+            self.biggest_id_given += 1;
+        }
+
         self.active_notifications
             .insert(self.biggest_id_given, notification);
+
         self.biggest_id_given
     }
 
     pub fn replace_notification(&mut self, id: u32, notification: Notification) {
         self.active_notifications.insert(id, notification);
+    }
+
+    pub fn close_notification(
+        &mut self,
+        id: u32,
+        reason: NotificationCloseReason,
+    ) -> Result<(), NotificationError> {
+        self.expire_notification(&id)?;
+
+        self.inactive_uncommited_notification_ids.push((id, reason));
+
+        Ok(())
     }
 
     pub fn is_active(&self) -> bool {
@@ -186,11 +235,10 @@ impl NotificationManager {
         &mut self,
         event_queue: &HashMap<SurfaceID, Vec<EventResponse>>,
         process_surface: &mut F,
-    ) -> Vec<Notification>
+    ) -> Vec<(u32, NotificationCloseReason)>
     where
         F: FnMut(&SurfaceID, &Notification, &mut HashMap<String, i32>) -> SurfaceProcessingOutput,
     {
-        let mut ids_to_remove = Vec::<u32>::new();
         let mut offset_per_output = HashMap::<String, i32>::new();
 
         for (id, notification) in self.active_notifications.iter_mut() {
@@ -218,22 +266,48 @@ impl NotificationManager {
                 }
             });
 
-            for surface_id in surfaces_to_delete {
+            for surface_id in surfaces_to_delete.iter() {
                 notification.delete_surface(&surface_id);
             }
 
-            if !notification.has_any_surface() {
-                ids_to_remove.push(*id);
+            if notification.has_timed_out() {
+                notification.expire();
+
+                self.inactive_uncommited_notification_ids
+                    .push((*id, NotificationCloseReason::Expired));
+            } else if !notification.has_any_surface() {
+                let surfaces_previously_deleted = surfaces_to_delete.is_empty();
+
+                self.inactive_uncommited_notification_ids.push((
+                    *id,
+                    if surfaces_previously_deleted {
+                        NotificationCloseReason::Dismissed
+                    } else {
+                        NotificationCloseReason::Undefined
+                    },
+                ));
             } else {
                 notification.is_dirty = false;
             }
         }
 
-        let mut inactive_notifications = Vec::<Notification>::new();
-        for id in ids_to_remove {
-            inactive_notifications.push(self.active_notifications.remove(&id).unwrap());
+        let ret_value = self.inactive_uncommited_notification_ids.clone();
+        self.inactive_uncommited_notification_ids.clear();
+
+        for (id, _) in ret_value.iter() {
+            self.expire_notification(id).unwrap();
         }
 
-        inactive_notifications
+        ret_value
+    }
+
+    fn expire_notification(&mut self, id: &u32) -> Result<(), NotificationError> {
+        let mut notification = self
+            .active_notifications
+            .remove(id)
+            .ok_or(NotificationError::InvalidID)?;
+        notification.expire();
+
+        Ok(())
     }
 }
