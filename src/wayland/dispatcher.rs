@@ -246,13 +246,24 @@ pub mod dispatcher {
                         }
                     }
                 }
-                EventType::Button { serial, time: _, button, state } => {
+                EventType::Button {
+                    serial,
+                    time: _,
+                    button,
+                    state,
+                } => {
                     let current_state_opt = data.current_surface.read().unwrap();
 
-                    if let Some(current_state) = &*current_state_opt && serial > current_state.0 {
+                    if let Some(current_state) = &*current_state_opt
+                        && serial > current_state.0
+                    {
                         if let Ok(state) = state.into_result() {
                             wayland_state.with_surface(&current_state.1, |wl_state, surface| {
-                                surface.handle_pointer_event(wl_state, LinuxButtonCode::from(button), state);
+                                surface.handle_pointer_event(
+                                    wl_state,
+                                    LinuxButtonCode::from(button),
+                                    state,
+                                );
                             });
                         } else {
                             eprintln!("WlPointer: Invalid button state: {:?}", state);
@@ -325,7 +336,11 @@ pub mod dispatcher {
             type EventType = <WlSurface as Proxy>::Event;
             match event {
                 EventType::PreferredBufferScale { factor } => {
-                    state.with_surface(&proxy.id(), |wl_state, surface| surface.set_buffer_scale(wl_state, factor)).unwrap();
+                    state
+                        .with_surface(&proxy.id(), |wl_state, surface| {
+                            surface.set_buffer_scale(wl_state, factor)
+                        })
+                        .unwrap();
                 }
                 _ => {
                     println!("WlSurface: {:?}", event);

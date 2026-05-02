@@ -1,12 +1,10 @@
 use std::collections::HashMap;
-use std::fmt;
 use std::sync::Arc;
 
 use serde::Deserialize;
-use serde::de::{MapAccess, Visitor};
+use serde::de::{IntoDeserializer, MapAccess, Visitor};
 use toml;
 
-use crate::notification::notification_manager_write;
 use crate::render::Color;
 use crate::wayland::{Anchor, Layer};
 
@@ -119,6 +117,15 @@ pub struct OutputConfiguration {
     #[serde(default)]
     pub height: Option<i32>,
 
+    #[serde(default)]
+    pub message_layout: Option<String>,
+
+    #[serde(default)]
+    pub font_size: Option<f32>,
+    #[serde(deserialize_with = "deserialize_color")]
+    #[serde(default)]
+    pub text_color: Option<Color>,
+
     #[serde(deserialize_with = "deserialize_color")]
     #[serde(default)]
     pub background_color: Option<Color>,
@@ -145,27 +152,101 @@ pub struct OutputConfiguration {
 
 #[macro_export]
 macro_rules! with_other {
-    ( $self:expr,$other:expr,$field:ident ) => {{ $self.$field = $self.$field.or($other.$field) }};
+    ( $self:expr,$other:expr,$($field:ident) + ) => {{ $( $self.$field = $self.$field.or($other.$field); )+ }};
+}
+#[macro_export]
+macro_rules! with_other_owned {
+    ( $self:expr,$other:expr,$($field:ident) + ) => {{ $( $self.$field = $self.$field.as_ref().or($other.$field.as_ref()).map(|i| i.clone()); )+ }};
 }
 impl OutputConfiguration {
     pub fn complete_missing(&mut self, other: &OutputConfiguration) {
-        with_other!(self, other, width);
-        with_other!(self, other, height);
+        with_other!(self, other, width height);
+        with_other_owned!(self, other, message_layout);
+        with_other!(self, other, font_size text_color);
         with_other!(self, other, background_color);
-        with_other!(self, other, border_color);
-        with_other!(self, other, border_size);
-        with_other!(self, other, anchor);
-        with_other!(self, other, direction);
-        with_other!(self, other, layer);
-        with_other!(self, other, margins);
+        with_other!(self, other, border_color border_size);
+        with_other!(self, other, anchor direction layer margins);
+    }
+
+    pub fn get_message_layout(&self, mut render_fragment: impl FnMut(&str, f32, Color) -> ()) {
+        let layout = self.message_layout.as_ref().unwrap();
+        for chunk in layout.split(['<', '>']) {
+            if chunk.len() == 0 {
+                continue;
+            }
+
+            match chunk {
+                fragment => {
+                    let mut font_size: Option<f32> = None;
+                    let mut text_color: Option<Color> = None;
+
+                    let fragment_split = fragment.split(['=', ' ']).collect::<Vec<&str>>();
+                    let mut fragment_index = 0;
+
+                    loop {
+                        match fragment_split.as_slice()[fragment_index..] {
+                            ["font_size", value, ..] => {
+                                fragment_index += 2;
+
+                                match value.parse::<f32>() {
+                                    Ok(parsed_value) => font_size = Some(parsed_value),
+                                    Err(error) => eprintln!(
+                                        "Failed to parse 'font_size' parameter in 'message_layout': {}",
+                                        error.to_string()
+                                    ),
+                                }
+                            }
+                            ["color", value, ..] => {
+                                fragment_index += 2;
+
+                                let u32_value = u32::from_str_radix(
+                                    value.strip_prefix("0x").unwrap_or(value),
+                                    16,
+                                );
+                                if let Err(error) = u32_value {
+                                    eprintln!(
+                                        "Failed to parse 'color' parameter in 'message_layout': {}",
+                                        error.to_string()
+                                    );
+                                    continue;
+                                }
+                                let u32_value = u32_value.unwrap();
+
+                                use serde::de::value::{Error, U32Deserializer};
+                                match deserialize_color::<U32Deserializer<Error>>(
+                                    u32_value.into_deserializer(),
+                                ) {
+                                    Ok(parsed_color) => text_color = parsed_color,
+                                    Err(error) => eprintln!(
+                                        "Failed to parse 'color' parameter in 'message_layout': {}",
+                                        error.to_string()
+                                    ),
+                                }
+                            }
+                            _ => break,
+                        }
+                    }
+
+                    let fragment = fragment_split[fragment_index..].join(" ");
+                    render_fragment(
+                        fragment.as_str(),
+                        font_size.unwrap_or(self.font_size.unwrap()),
+                        text_color.unwrap_or(self.text_color.unwrap()),
+                    );
+                }
+            }
+        }
     }
 }
 
 impl Default for OutputConfiguration {
     fn default() -> Self {
         OutputConfiguration {
-            width: Some(300),
-            height: Some(150),
+            width: Some(260),
+            height: Some(125),
+            message_layout: Some("<summary> from <app_name>\n<body>".to_owned()),
+            font_size: Some(14.0),
+            text_color: Some(Color::rgba(0xFF, 0xFF, 0xFF, 0xFF)),
             background_color: Some(Color::rgba(0x00, 0x00, 0x00, 0xFF)),
             border_color: Some(Color::rgba(0x00, 0x00, 0x00, 0xFF)),
             border_size: Some(0),
@@ -199,7 +280,7 @@ struct OutputsVisitor;
 impl<'de> Visitor<'de> for OutputsVisitor {
     type Value = HashMap<String, Arc<OutputConfiguration>>;
 
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         formatter.write_str("a map of output names to pointers to configuration")
     }
 
@@ -327,7 +408,11 @@ impl Configuration {
 
     pub fn get_event_handler(&self) -> impl Fn(&EventTrigger) -> EventResponse + use<> {
         let event_translator = self.events.clone();
-        move |trigger: &EventTrigger| *event_translator.get(trigger).unwrap_or(&EventResponse::Nothing)
+        move |trigger: &EventTrigger| {
+            *event_translator
+                .get(trigger)
+                .unwrap_or(&EventResponse::Nothing)
+        }
     }
 
     fn populate_outputs_with_default(&mut self) {
@@ -560,4 +645,95 @@ fn test_event_handler() {
         event_handler(&EventTrigger::OnMiddleClick),
         EventResponse::Nothing
     );
+}
+
+#[test]
+fn test_message_layout_simple() {
+    let file_contents = r#"
+        message_layout = "<summary>\n<app_name>\n<body>"
+    "#
+    .to_owned();
+
+    let configuration = Configuration::from_string(&file_contents);
+
+    if let Err(error) = configuration {
+        panic!("{}", error.to_string());
+    }
+
+    let configuration = configuration.unwrap();
+    let output_config = configuration.get_output_configuration("");
+
+    let mut app_name_called = false;
+    let mut summary_called = false;
+    let mut body_called = false;
+    let mut fragment_called = false;
+
+    let render = |text: &str, font_size: f32, text_color: Color| {
+        assert_eq!(
+            font_size,
+            configuration.default_output_config.font_size.unwrap()
+        );
+        assert_eq!(
+            text_color,
+            configuration.default_output_config.text_color.unwrap()
+        );
+
+        match text {
+            "app_name" => app_name_called = true,
+            "summary" => summary_called = true,
+            "body" => body_called = true,
+            "\n" => fragment_called = true,
+            _ => {
+                unreachable!()
+            }
+        }
+    };
+
+    output_config.get_message_layout(render);
+
+    assert!(app_name_called);
+    assert!(summary_called);
+    assert!(body_called);
+    assert!(fragment_called);
+}
+
+#[test]
+fn test_message_layout_customized() {
+    let file_contents = r#"
+        message_layout = "<color=0xDEADBEEF font_size=13.5 this is a custom text>\n<font_size=18 summary>"
+    "#
+    .to_owned();
+
+    let configuration = Configuration::from_string(&file_contents);
+
+    if let Err(error) = configuration {
+        panic!("{}", error.to_string());
+    }
+
+    let configuration = configuration.unwrap();
+    let output_config = configuration.get_output_configuration("");
+
+    let mut summary_called = false;
+    let mut fragment_called = false;
+
+    let render = |text: &str, font_size: f32, text_color: Color| match text {
+        "summary" => {
+            summary_called = true;
+            assert_eq!(font_size, 18.0);
+        }
+        "this is a custom text" => {
+            fragment_called = true;
+            assert_eq!(font_size, 13.5);
+            assert_eq!(text_color, Color::rgba(0xAD, 0xBE, 0xEF, 0xDE));
+        }
+        "\n" => {}
+        _ => {
+            unreachable!()
+        }
+    };
+
+    output_config.get_message_layout(render);
+
+    assert!(summary_called);
+    assert!(fragment_called);
 }

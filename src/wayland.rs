@@ -26,8 +26,8 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrL
 pub use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
 pub use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::Anchor;
 
-use dispatcher::dispatcher::*;
 pub use crate::configuration::EventTrigger;
+use dispatcher::dispatcher::*;
 
 impl TryFrom<LinuxButtonCode> for EventTrigger {
     type Error = u32;
@@ -478,7 +478,7 @@ impl Drop for Surface {
 
 static WAYLAND_STATE: RwLock<WaylandState> = RwLock::new(WaylandState::new());
 
-use crate::{generate_rw_accessors};
+use crate::generate_rw_accessors;
 generate_rw_accessors!(WAYLAND_STATE WAYLAND_WRITE_BACKTRACE wayland_state_read wayland_state_write wayland_state_panic WaylandState);
 
 pub struct WaylandState {
@@ -534,7 +534,9 @@ impl WaylandState {
         self.outputs.get_mut().unwrap().insert(output_name, output);
     }
 
-    pub fn consume_trigger_events(&mut self) -> impl Iterator<Item = (SurfaceID, Vec<EventTrigger>)> {
+    pub fn consume_trigger_events(
+        &mut self,
+    ) -> impl Iterator<Item = (SurfaceID, Vec<EventTrigger>)> {
         self.trigger_events.get_mut().unwrap().drain()
     }
 
@@ -554,12 +556,7 @@ impl WaylandState {
             return None;
         }
 
-        let mut surface = Surface::new(
-            self,
-            width,
-            height,
-            Some(output_name.clone()),
-        );
+        let mut surface = Surface::new(self, width, height, Some(output_name.clone()));
 
         surface.set_buffer_scale(self, 1);
 
@@ -573,7 +570,8 @@ impl WaylandState {
     }
 
     pub fn with_surface<F>(&mut self, id: &SurfaceID, mut closure: F) -> Option<()>
-        where F: FnMut(&mut WaylandState, &mut Surface) -> ()
+    where
+        F: FnMut(&mut WaylandState, &mut Surface) -> (),
     {
         // Take it out of the map so we don't keep a mutable borrow to self
         let (id_mov, mut surface) = self.surfaces.get_mut()?.remove_entry(id)?;
@@ -598,7 +596,10 @@ impl WaylandState {
 
     pub fn destroy_scheduled_surfaces(&mut self) {
         // Remove the reference so the Surface object is dropped.
-        self.surfaces.get_mut().unwrap().retain(|_, surface| !surface.will_destroy_later());
+        self.surfaces
+            .get_mut()
+            .unwrap()
+            .retain(|_, surface| !surface.will_destroy_later());
     }
 
     fn dirty_all_surfaces(&mut self) {
@@ -624,9 +625,7 @@ pub struct SocketManager<'a> {
 }
 
 impl<'a> SocketManager<'a> {
-    pub fn new(
-        event_queue: &'a mut EventQueue<WaylandState>,
-    ) -> SocketManager<'a> {
+    pub fn new(event_queue: &'a mut EventQueue<WaylandState>) -> SocketManager<'a> {
         let epoll_fd = epoll::create();
 
         SocketManager {
@@ -661,7 +660,9 @@ impl<'a> SocketManager<'a> {
 
     fn dispatch(&mut self) {
         let mut wayland_state = wayland_state_write();
-        self.event_queue.dispatch_pending(&mut wayland_state).unwrap();
+        self.event_queue
+            .dispatch_pending(&mut wayland_state)
+            .unwrap();
     }
 }
 

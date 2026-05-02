@@ -65,7 +65,7 @@ macro_rules! generate_rw_accessors {
                     panic!(
                         "Unable to acquire lock while fetching state. No write lock backtrace is available.",
                     );
-        
+
                 }
             };
         }

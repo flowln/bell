@@ -12,47 +12,66 @@ mod render;
 mod signal;
 mod wayland;
 
-use configuration::Configuration;
 use crate::dbus as _dbus;
-use render::Color;
+use configuration::Configuration;
 use render::render::Renderer;
+use render::{Attrs, Metrics};
 
 use configuration::{GrowthDirection, OutputConfiguration};
-use notification::{Notification, SurfaceProcessingOutput, notification_manager_read, notification_manager_write};
-
+use notification::{
+    Notification, SurfaceProcessingOutput, notification_manager_read, notification_manager_write,
+};
 
 static EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 unsafe fn sigint_handler() {
     EXIT_REQUESTED.store(true, Ordering::Relaxed);
 }
 
+static TEXT_PLACEHOLDER: &'static str = "<<placeholder>>";
+fn render(
+    renderer: &mut Renderer,
+    notification: &Notification,
+    spec: &OutputConfiguration,
+) -> Option<()> {
+    let default_text_opts = render::text::TextRenderOptions::new();
 
-fn render(renderer: &mut Renderer, notification: &Notification, spec: &OutputConfiguration) {
-    let mut text_opts = render::text::TextRenderOptions::new();
-    text_opts.font_size = 20.;
+    let mut text_span_fragment_holder = Vec::<String>::new();
+    let mut text_span = Vec::<(&str, Attrs)>::new();
 
-    renderer.draw_text(
-        &notification.app_name,
-        10,
-        30,
-        Color::rgba(0x00, 0x00, 0x00, 0xFF),
-        text_opts,
-    );
+    spec.get_message_layout(|text_fragment, font_size, text_color| {
+        // NOTE: Arbitrary values to make a reasonable line height.
+        let metrics = Metrics::new(font_size, font_size + 6.0f32.min(font_size * 0.3));
+        let attrs = default_text_opts
+            .text_attributes
+            .clone()
+            .metrics(metrics)
+            .color(text_color);
 
-    let mut text_opts = render::text::TextRenderOptions::new();
-    text_opts.font_size = 12.;
+        match text_fragment {
+            "app_name" => text_span.push((notification.app_name.as_str(), attrs)),
+            "summary" => text_span.push((notification.summary.as_str(), attrs)),
+            "body" => text_span.push((notification.body.as_str(), attrs)),
+            fragment => {
+                text_span_fragment_holder.push(String::from(fragment));
+                text_span.push((TEXT_PLACEHOLDER, attrs));
+            }
+        }
+    });
 
-    renderer.draw_text(
-        &notification.summary,
-        10,
-        80,
-        Color::rgba(0xFF, 0xFF, 0xFF, 0xFF),
-        text_opts,
-    );
+    let mut holder_it = text_span_fragment_holder.iter();
+    text_span.iter_mut().for_each(|(text, _)| {
+        if *text == TEXT_PLACEHOLDER {
+            *text = holder_it.next().unwrap().as_str();
+        }
+    });
+
+    renderer.draw_text_spans(text_span, 10, 10, default_text_opts);
 
     if let Some(border_color) = spec.border_color {
-        renderer.draw_border(spec.border_size.unwrap(), border_color);
+        renderer.draw_border(spec.border_size?, border_color);
     }
+
+    Some(())
 }
 
 fn with_offset<F>(offset: &mut i32, spec: &OutputConfiguration, mut closure: F) -> Option<()>
@@ -135,7 +154,7 @@ fn process_surface(
             renderer.clear(None);
 
             render(renderer, notification, output_spec);
-            surface.write(renderer.get_backend());
+            surface.write(renderer.get_backing_store());
         }
 
         Some(())
@@ -209,7 +228,6 @@ fn main() {
             )
         };
 
-
     signal::install_signal_handler(signal::PosixSignal::SIGINT, sigint_handler);
 
     while !EXIT_REQUESTED.load(Ordering::Relaxed) {
@@ -233,6 +251,8 @@ fn main() {
         }
 
         socket_handler.handle(50);
-        dbus_connection.process(std::time::Duration::from_millis(50)).unwrap();
+        dbus_connection
+            .process(std::time::Duration::from_millis(50))
+            .unwrap();
     }
 }

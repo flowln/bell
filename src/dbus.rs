@@ -120,7 +120,11 @@ fn handle_notify_message(
 ) -> Result<u32, MethodErr> {
     let input = NotifyMessageInput::from(input);
 
-    let body = if input.body.len() != 0 { Some(input.body) } else { None };
+    let body = if input.body.len() != 0 {
+        Some(input.body)
+    } else {
+        None
+    };
     let mut notification = Notification::new(input.app_name, input.summary, body);
 
     let mut notification_manager = notification_manager_write();

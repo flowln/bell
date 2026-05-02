@@ -1,6 +1,6 @@
 use std::boxed::Box;
 
-use libc::{SA_SIGINFO};
+use libc::SA_SIGINFO;
 use libc::{c_int, sigset_t};
 
 macro_rules! posix_signal {
@@ -35,7 +35,7 @@ pub fn install_signal_handler(signal: PosixSignal, handler: unsafe fn() -> ()) {
 
     let action = libc::sigaction {
         sa_sigaction: handler as usize,
-        sa_mask: unsafe {*mask.assume_init()},
+        sa_mask: unsafe { *mask.assume_init() },
         sa_flags: SA_SIGINFO,
         sa_restorer: None,
     };
@@ -50,7 +50,7 @@ fn test_sigint() {
 
     static CONDITION: AtomicBool = AtomicBool::new(false);
     unsafe fn handler() {
-        CONDITION.store(true,Ordering::Relaxed);
+        CONDITION.store(true, Ordering::Relaxed);
     }
 
     install_signal_handler(PosixSignal::SIGINT, handler);

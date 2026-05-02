@@ -1,10 +1,8 @@
 use crate::configuration::{Configuration, EventResponse, OutputConfiguration};
-use crate::wayland::{
-    SurfaceBackend, SurfaceID, wayland_state_read, wayland_state_write,
-};
+use crate::wayland::{SurfaceBackend, SurfaceID, wayland_state_read, wayland_state_write};
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{LazyLock, RwLock, Arc};
+use std::sync::{Arc, LazyLock, RwLock};
 
 pub struct Notification {
     pub app_name: String,
@@ -116,7 +114,9 @@ impl Notification {
     }
 
     pub fn get_output_spec(&self, output_name: &String) -> Option<&OutputConfiguration> {
-        self.outputs.get(output_name).map(|c| unsafe{ &*Arc::as_ptr(c) })
+        self.outputs
+            .get(output_name)
+            .map(|c| unsafe { &*Arc::as_ptr(c) })
     }
 
     fn expire(&mut self) {
@@ -137,9 +137,10 @@ pub enum SurfaceProcessingOutput {
     SurfaceDestroyed,
 }
 
-pub static NOTIFICATION_MANAGER: RwLock<NotificationManager> = RwLock::new(NotificationManager::new());
+pub static NOTIFICATION_MANAGER: RwLock<NotificationManager> =
+    RwLock::new(NotificationManager::new());
 
-use crate::{generate_rw_accessors};
+use crate::generate_rw_accessors;
 generate_rw_accessors!(NOTIFICATION_MANAGER NOTIFICATION_WRITE_BACKTRACE notification_manager_read notification_manager_write notification_manager_panic NotificationManager);
 
 pub struct NotificationManager {
@@ -168,7 +169,8 @@ impl NotificationManager {
 
     pub fn add_notification(&mut self, notification: Notification) -> u32 {
         self.biggest_id_given += 1;
-        self.active_notifications.insert(self.biggest_id_given, notification);
+        self.active_notifications
+            .insert(self.biggest_id_given, notification);
         self.biggest_id_given
     }
 

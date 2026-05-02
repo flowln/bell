@@ -1,10 +1,8 @@
-pub use cosmic_text::Color;
+pub use cosmic_text::{Attrs, Color, Metrics};
 
 #[macro_export]
 macro_rules! with_scale {
-    ( $self:expr,$x:expr ) => {{
-        ($x as usize) * $self.buffer_scale
-    }};
+    ( $self:expr,$x:expr ) => {{ ($x as usize) * $self.buffer_scale }};
 }
 
 fn blend_colors(first_color: Color, second_color: Color) -> Color {
@@ -42,7 +40,7 @@ pub mod render {
     use crate::render::text::*;
 
     pub struct Renderer {
-        backend: Vec<u32>,
+        backing_store: Vec<u32>,
 
         pub width: usize,
         pub height: usize,
@@ -58,7 +56,7 @@ pub mod render {
             let text_renderer = TextRenderer::new(width, height, 1);
 
             Renderer {
-                backend: vec![0; width * height],
+                backing_store: vec![0; width * height],
                 width,
                 height,
                 buffer_scale: 1,
@@ -67,15 +65,15 @@ pub mod render {
             }
         }
 
-        pub fn get_backend(&mut self) -> &mut [u32] {
-            self.backend.as_mut_slice()
+        pub fn get_backing_store(&mut self) -> &mut [u32] {
+            self.backing_store.as_mut_slice()
         }
 
         pub fn set_width(&mut self, width: usize) {
             self.width = width;
             self.text_renderer.width = width;
 
-            self.backend.resize(
+            self.backing_store.resize(
                 width * self.height * (self.buffer_scale.pow(2)) as usize,
                 self.clear_color.0,
             );
@@ -85,7 +83,7 @@ pub mod render {
             self.height = height;
             self.text_renderer.height = height;
 
-            self.backend.resize(
+            self.backing_store.resize(
                 self.width * height * (self.buffer_scale.pow(2)) as usize,
                 self.clear_color.0,
             );
@@ -99,12 +97,16 @@ pub mod render {
             self.buffer_scale = scale_factor as usize;
             self.text_renderer.buffer_scale = self.buffer_scale;
 
-            self.backend.resize(
+            self.backing_store.resize(
                 self.width * self.height * (self.buffer_scale.pow(2)) as usize,
                 self.clear_color.0,
             );
         }
 
+        /// Draws a string of text to the backing store.
+        ///
+        /// The x and y coordinates are surface-local coordinates representing the
+        /// top-left corner from which text rendering will start.
         pub fn draw_text(
             &mut self,
             text: &String,
@@ -114,7 +116,22 @@ pub mod render {
             options: TextRenderOptions,
         ) {
             self.text_renderer
-                .draw_text(&mut self.backend, text, x, y, color, options);
+                .draw_text(&mut self.backing_store, text, x, y, color, options);
+        }
+
+        /// Draws a series of strings of text to the backing store with per-item customization.
+        ///
+        /// The x and y coordinates are surface-local coordinates representing the
+        /// top-left corner from which text rendering will start.
+        pub fn draw_text_spans<'a>(
+            &mut self,
+            text_spans: Vec<(&str, Attrs<'a>)>,
+            x: i32,
+            y: i32,
+            options: TextRenderOptions,
+        ) {
+            self.text_renderer
+                .draw_text_spans(&mut self.backing_store, text_spans, x, y, options);
         }
 
         pub fn draw_rect(&mut self, x: i32, y: i32, width: usize, height: usize, color: Color) {
@@ -133,7 +150,7 @@ pub mod render {
 
             for y_point in y..y_end {
                 for x_point in x..x_end {
-                    self.backend[y_point * backend_width + x_point] = color.0;
+                    self.backing_store[y_point * backend_width + x_point] = color.0;
                 }
             }
         }
@@ -167,20 +184,21 @@ pub mod render {
 
         pub fn clear(&mut self, color: Option<Color>) {
             let color = color.unwrap_or(self.clear_color);
-            self.backend.fill(color.0);
+            self.backing_store.fill(color.0);
         }
     }
 }
 
 pub mod text {
-    use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping, SwashCache};
-
-    pub use crate::render::Color;
+    pub use crate::render::{Attrs, Color, Metrics};
+    use cosmic_text::{Buffer, FontSystem, Shaping, SwashCache};
 
     pub struct TextRenderOptions<'a> {
         pub text_attributes: Attrs<'a>,
 
-        pub line_height: f32,
+        /// Margin from the top or bottom of a glyph to the line boundary.
+        pub line_height_margin: f32,
+        /// Height in pixels of each glyph.
         pub font_size: f32,
     }
 
@@ -188,7 +206,7 @@ pub mod text {
         pub fn new() -> TextRenderOptions<'static> {
             TextRenderOptions {
                 text_attributes: Attrs::new(),
-                line_height: 20.,
+                line_height_margin: 4.,
                 font_size: 12.,
             }
         }
@@ -234,7 +252,10 @@ pub mod text {
             color: Color,
             options: TextRenderOptions,
         ) {
-            let metrics = Metrics::new(options.font_size, options.line_height);
+            let metrics = Metrics::new(
+                options.font_size,
+                options.font_size + 2.0 * options.line_height_margin,
+            );
             let metrics = self.scale_metrics(metrics);
 
             let buffer = self.buffer.as_mut().unwrap();
@@ -265,6 +286,57 @@ pub mod text {
             };
 
             buffer.draw(&mut self.swash_cache, color, callback);
+        }
+
+        pub fn draw_text_spans<'a>(
+            &mut self,
+            backend: &mut [u32],
+            mut text_spans: Vec<(&str, Attrs<'a>)>,
+            x: i32,
+            y: i32,
+            default_options: TextRenderOptions,
+        ) {
+            let str_spans = {
+                let attr_change = |attrs: &mut Attrs<'_>| {
+                    attrs.metrics_opt = attrs
+                        .metrics_opt
+                        .map(|cache_metrics| self.scale_metrics(cache_metrics.into()).into())
+                };
+                text_spans
+                    .iter_mut()
+                    .for_each(|(_, attrs)| attr_change(attrs));
+                text_spans.into_iter()
+            };
+
+            let mut buffer = self
+                .buffer
+                .as_mut()
+                .unwrap()
+                .borrow_with(&mut self.font_system);
+            buffer.set_rich_text(
+                str_spans,
+                &default_options.text_attributes,
+                Shaping::Advanced,
+                None,
+            );
+
+            let callback = |x_glyph, y_glyph, w, h, c| {
+                TextRenderer::draw_callback(
+                    backend,
+                    with_scale!(self, self.width),
+                    (x + x_glyph) as u32,
+                    (y + y_glyph) as u32,
+                    w,
+                    h,
+                    c,
+                )
+            };
+
+            buffer.draw(
+                &mut self.swash_cache,
+                Color::rgb(0x00, 0x00, 0x00),
+                callback,
+            );
         }
 
         fn draw_callback(
