@@ -39,6 +39,10 @@ fn render(
     let mut x_consumed = 0;
     let mut y_offset = 0;
 
+    if let Some(border_size) = spec.border_size && border_size != 0 {
+        renderer.draw_border(border_size, spec.border_radius, spec.border_color?);
+    }
+
     if let Some(app_icon) = &notification.app_icon {
         let preferred_icon_size = icon::IconSize { size: 16, scale: 1 };
         let icon_information = retrieve_app_icon(
@@ -121,10 +125,6 @@ fn render(
 
     let remaining_width = renderer.width - x_consumed - padding_x;
     renderer.draw_text_spans(text_span, padding_x as i32, padding_y as i32, remaining_width, default_text_opts);
-
-    if let Some(border_color) = spec.border_color {
-        renderer.draw_border(spec.border_size?, spec.border_radius, border_color);
-    }
 
     Some(())
 }
