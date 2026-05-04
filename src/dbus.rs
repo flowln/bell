@@ -123,7 +123,7 @@ pub fn create_connection() -> Result<Connection, Box<dyn Error>> {
                     .close_notification(id, NotificationCloseReason::Requested)
                 {
                     Ok(_) => Ok(()),
-                    Err(NotificationError::InvalidID) => Err(MethodErr::invalid_arg(&id)),
+                    Err(NotificationError::InvalidID(id)) => Err(MethodErr::invalid_arg(&id)),
                 }
             },
         );

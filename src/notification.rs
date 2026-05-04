@@ -167,7 +167,15 @@ pub enum SurfaceProcessingOutput {
 
 #[derive(Debug)]
 pub enum NotificationError {
-    InvalidID,
+    InvalidID(u32),
+}
+
+impl std::fmt::Display for NotificationError {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        match self {
+            Self::InvalidID(id) => write!(fmt, "Invalid ID ({})", id)
+        }
+    }
 }
 
 /// https://specifications.freedesktop.org/notification/latest/protocol.html#id-1.10.4.2.4
@@ -310,7 +318,9 @@ impl NotificationManager {
         self.inactive_uncommited_notification_ids.clear();
 
         for (id, _) in ret_value.iter() {
-            self.expire_notification(id).unwrap();
+            if let Err(error) = self.expire_notification(id) {
+                eprintln!("Failed to set notification as expired: {}", error);
+            }
         }
 
         ret_value
@@ -320,7 +330,7 @@ impl NotificationManager {
         let mut notification = self
             .active_notifications
             .remove(id)
-            .ok_or(NotificationError::InvalidID)?;
+            .ok_or(NotificationError::InvalidID(*id))?;
         notification.expire();
 
         Ok(())
