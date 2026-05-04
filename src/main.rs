@@ -160,7 +160,7 @@ fn process_surface(
     }
 
     let output_name = surface.output_name.clone();
-    let will_destroy = surface.will_destroy_later();
+    let will_destroy = surface.will_destroy_later() || notification.has_timed_out();
 
     let output_spec = notification.get_output_spec(&output_name).unwrap();
     let try_rendering = |offset: i32| {
