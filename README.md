@@ -9,6 +9,7 @@ Lightweight notification application for Wayland systems.
   - [Quickstart](#quickstart)
   - [Configuration](#configuration)
     - [Configuration file format](#configuration-file-format)
+  - [Compatibility](#compatibility)
   - [References](#references)
 
 ## Quickstart
@@ -125,6 +126,12 @@ right = 2
 bottom = 2
 left = 2
 ```
+
+## Compatibility
+
+This project relies on the [`wlr-layer-shell-unstable-v1`](https://wayland.app/protocols/wlr-layer-shell-unstable-v1) protocol extension in order to create the notification surfaces.
+
+A list of compositors supporting this protocol can be found [here](https://wayland.app/protocols/wlr-layer-shell-unstable-v1#compositor-support).
 
 ## References
 
