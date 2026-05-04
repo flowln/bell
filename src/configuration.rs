@@ -347,8 +347,8 @@ const DEFAULT_PATHS: [&'static str; 3] = [
 
 use std::io::{Error, ErrorKind};
 impl Configuration {
-    pub fn from_default_paths() -> Result<Configuration, Vec<(ErrorKind, String)>> {
-        let mut failed_paths = Vec::<(ErrorKind, String)>::new();
+    pub fn from_default_paths() -> Result<Configuration, Error> {
+        let mut errors = Vec::<(std::path::PathBuf, Error)>::new();
 
         fn substitute_env_vars(input: &str) -> String {
             let mut ret = input.to_owned();
@@ -371,18 +371,29 @@ impl Configuration {
                     return Ok(configuration);
                 }
                 Err(error) => {
-                    failed_paths.push((error.kind(), error.to_string()));
+                    errors.push((path, error));
                 }
             }
         }
 
-        Err(failed_paths)
+        eprintln!("Failed to find a configuration file. Tried the following:");
+        for (path, error) in errors {
+            eprintln!("  {} - {}", path.display(), error)
+        }
+
+        Err(Error::from(ErrorKind::NotFound))
     }
 
     pub fn from_file(path: &std::path::Path) -> Result<Configuration, Error> {
         if !path.is_file() {
             let path_string = path.to_str().unwrap().to_owned();
-            return Err(Error::new(ErrorKind::NotFound, path_string));
+            return Err(Error::new(
+                ErrorKind::NotFound,
+                format!(
+                    "The specified configuration path '{}' is not a file.",
+                    path_string
+                ),
+            ));
         }
 
         let file_contents = std::fs::read_to_string(path)?;

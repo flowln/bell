@@ -240,49 +240,62 @@ fn process_surface(
 }
 
 struct ApplicationOptions {
+    config_path: Option<String>,
     ephemeral: bool,
 }
 
 impl Default for ApplicationOptions {
     fn default() -> Self {
-        ApplicationOptions { ephemeral: false }
+        ApplicationOptions {
+            ephemeral: false,
+            config_path: None,
+        }
     }
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let arguments = std::env::args();
 
     let mut options = ApplicationOptions::default();
-    for argument in arguments {
+    let mut args_iter = arguments.into_iter();
+    args_iter.next();  // Skip application name argument.
+    while let Some(argument) = args_iter.next() {
         match argument.as_str() {
+            "-c" | "--config" => {
+                let config_path = args_iter
+                    .next()
+                    .expect("Configuration file argument specified without a value after it.");
+                options.config_path = Some(config_path);
+            }
+            "--ephemeral" => options.ephemeral = true,
             "--help" => {
                 println!("bell: a lightweight notification daemon");
                 println!("");
                 println!("usage: bell [--ephemeral]");
                 println!("");
                 println!("Available options are:");
-                println!("  --ephemeral: Exit application after handling at least one notification.");
+                println!(
+                    "  --ephemeral: Exit application after handling at least one notification."
+                );
                 println!("  --help:      Show this help menu.");
                 println!("");
                 println!("For more information, access the website:");
                 println!("https://github.com/flowln/bell");
 
-                return;
+                return Ok(());
             }
-            "--ephemeral" => options.ephemeral = true,
             unrecognized => eprintln!("Unrecognized option '{}'", unrecognized),
         }
     }
 
-    let configuration = Configuration::from_default_paths();
-    if let Err(failed_paths) = &configuration {
-        for (kind, path) in failed_paths {
-            eprintln!("{}: {}", kind.to_string(), path);
-        }
-
-        eprintln!("Could not find a valid configuration file! Using the default configuration.");
-    }
-    let configuration = configuration.unwrap_or_default();
+    use std::path::PathBuf;
+    let configuration = match options.config_path {
+        None => Configuration::from_default_paths().unwrap_or_else(|err| {
+            eprintln!("Could not find a valid configuration file! Using the default configuration.");
+            Configuration::default()
+        }),
+        Some(path_str) => Configuration::from_file(PathBuf::from(path_str).as_path())?
+    };
     let event_handler = configuration.get_event_handler();
 
     {
@@ -367,4 +380,6 @@ fn main() {
             }
         }
     }
+
+    Ok(())
 }
