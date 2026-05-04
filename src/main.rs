@@ -95,7 +95,20 @@ fn render(
         x_consumed = x_consumed.max(width + 2 * padding_x);
     }
 
-    let default_text_opts = render::text::Attrs::new();
+    use cosmic_text::Family;
+    let mut default_text_opts = render::text::Attrs::new();
+    if let Some(font_family) = &spec.font_family {
+        let family = match font_family.as_str() {
+            "Serif" | "serif" => Family::Serif,
+            "SansSerif" | "sansserif" => Family::SansSerif,
+            "Cursive" | "cursive" => Family::Cursive,
+            "Fantasy" | "fantasy" => Family::Fantasy,
+            "Monospace" | "monospace" => Family::Monospace,
+            family_name => Family::Name(family_name),
+        };
+
+        default_text_opts = default_text_opts.family(family);
+    }
 
     let mut text_span_fragment_holder = Vec::<String>::new();
     let mut text_span = Vec::<(&str, Attrs)>::new();

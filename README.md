@@ -86,10 +86,23 @@ right-click = "close-notification"
 
 # Specify per-input options.
 [outputs."eDP-1"]
+# Default font family to use.
+# Will fallback to the default system font if it could not be found
+#
+# Can be one of:
+#   Sans, SansSerif, Cursive, Fantasy, Monospace
+#   ... or a custom font family name, like below:
+font_family = "Liberation Mono"
+
+# Default font size in pixels (height of each glyph).
+font_size = 12.0
+
+text_color = 0xFF006090
 background_color = 0xFF406060
 
 border_color = 0xFF000000
 border_size = 2
+# Radius in pixels with which to round the border edges.
 border_radius = 0
 
 # Where to anchor the notification on the output.

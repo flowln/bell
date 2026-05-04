@@ -122,6 +122,8 @@ pub struct OutputConfiguration {
 
     #[serde(default)]
     pub font_size: Option<f32>,
+    #[serde(default)]
+    pub font_family: Option<String>,
     #[serde(deserialize_with = "deserialize_color")]
     #[serde(default)]
     pub text_color: Option<Color>,
@@ -167,6 +169,7 @@ impl OutputConfiguration {
     pub fn complete_missing(&mut self, other: &OutputConfiguration) {
         with_other!(self, other, width height);
         with_other_owned!(self, other, message_layout);
+        with_other_owned!(self, other, font_family);
         with_other!(self, other, font_size text_color);
         with_other!(self, other, background_color);
         with_other_owned!(self, other, icon_theme);
@@ -251,6 +254,7 @@ impl Default for OutputConfiguration {
             width: Some(260),
             height: Some(125),
             message_layout: Some("<summary> from <app_name>\n<body>".to_owned()),
+            font_family: None,
             font_size: Some(14.0),
             text_color: Some(Color::rgba(0xFF, 0xFF, 0xFF, 0xFF)),
             background_color: Some(Color::rgba(0x00, 0x00, 0x00, 0xFF)),
