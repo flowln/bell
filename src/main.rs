@@ -20,7 +20,9 @@ use render::render::Renderer;
 use render::{Attrs, Metrics};
 
 use configuration::{GrowthDirection, OutputConfiguration};
-use notification::{Notification, SurfaceProcessingOutput, notification_manager_write};
+use notification::{
+    Notification, SurfaceProcessingOutput, notification_manager_read, notification_manager_write,
+};
 
 static EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 unsafe fn sigint_handler() {
@@ -39,7 +41,9 @@ fn render(
     let mut x_consumed = 0;
     let mut y_offset = 0;
 
-    if let Some(border_size) = spec.border_size && border_size != 0 {
+    if let Some(border_size) = spec.border_size
+        && border_size != 0
+    {
         renderer.draw_border(border_size, spec.border_radius, spec.border_color?);
     }
 
@@ -124,7 +128,13 @@ fn render(
     });
 
     let remaining_width = renderer.width - x_consumed - padding_x;
-    renderer.draw_text_spans(text_span, padding_x as i32, padding_y as i32, remaining_width, default_text_opts);
+    renderer.draw_text_spans(
+        text_span,
+        padding_x as i32,
+        padding_y as i32,
+        remaining_width,
+        default_text_opts,
+    );
 
     Some(())
 }
@@ -229,7 +239,41 @@ fn process_surface(
     return SurfaceProcessingOutput::Continue;
 }
 
+struct ApplicationOptions {
+    ephemeral: bool,
+}
+
+impl Default for ApplicationOptions {
+    fn default() -> Self {
+        ApplicationOptions { ephemeral: false }
+    }
+}
+
 fn main() {
+    let arguments = std::env::args();
+
+    let mut options = ApplicationOptions::default();
+    for argument in arguments {
+        match argument.as_str() {
+            "--help" => {
+                println!("bell: a lightweight notification daemon");
+                println!("");
+                println!("usage: bell [--ephemeral]");
+                println!("");
+                println!("Available options are:");
+                println!("  --ephemeral: Exit application after handling at least one notification.");
+                println!("  --help:      Show this help menu.");
+                println!("");
+                println!("For more information, access the website:");
+                println!("https://github.com/flowln/bell");
+
+                return;
+            }
+            "--ephemeral" => options.ephemeral = true,
+            unrecognized => eprintln!("Unrecognized option '{}'", unrecognized),
+        }
+    }
+
     let configuration = Configuration::from_default_paths();
     if let Err(failed_paths) = &configuration {
         for (kind, path) in failed_paths {
@@ -313,5 +357,14 @@ fn main() {
         dbus_connection
             .process(std::time::Duration::from_millis(50))
             .unwrap();
+
+        if options.ephemeral {
+            let notification_manager = notification_manager_read();
+            if notification_manager.has_had_any_notification()
+                && !notification_manager.has_any_active_notification()
+            {
+                break;
+            }
+        }
     }
 }

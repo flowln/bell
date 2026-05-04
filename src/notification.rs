@@ -173,7 +173,7 @@ pub enum NotificationError {
 impl std::fmt::Display for NotificationError {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
         match self {
-            Self::InvalidID(id) => write!(fmt, "Invalid ID ({})", id)
+            Self::InvalidID(id) => write!(fmt, "Invalid ID ({})", id),
         }
     }
 }
@@ -235,6 +235,11 @@ impl NotificationManager {
     }
 
     pub fn replace_notification(&mut self, id: u32, notification: Notification) {
+        // Move this out of zero so that 'has_had_any_notification' works properly.
+        if self.biggest_id_given == 0 {
+            self.biggest_id_given += 1;
+        }
+
         self.active_notifications.insert(id, notification);
     }
 
@@ -250,7 +255,12 @@ impl NotificationManager {
         Ok(())
     }
 
-    pub fn is_active(&self) -> bool {
+    pub fn has_had_any_notification(&self) -> bool {
+        // It will only increment when adding a new notification.
+        self.biggest_id_given != 0
+    }
+
+    pub fn has_any_active_notification(&self) -> bool {
         !self.active_notifications.is_empty()
     }
 
