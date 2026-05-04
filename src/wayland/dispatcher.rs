@@ -18,6 +18,15 @@ pub mod dispatcher {
 
     use crate::wayland::WaylandState;
 
+    macro_rules! debug_println {
+        ($string:literal) => {
+            if cfg!(debug_assertions) { println!($string) }
+        };
+        ($format:literal,$( $value:ident ),+) => {
+            if cfg!(debug_assertions) { println!($format, $( $value, )+) }
+        };
+    }
+
     pub struct UserData;
     #[derive(Debug)]
     pub struct BufferUserData {
@@ -102,7 +111,7 @@ pub mod dispatcher {
                             Some(registry.bind(name, version, queue_handle, UserData {}));
                     }
 
-                    println!("Name: {name}, Interface: {interface}");
+                    debug_println!("Name: {name}, Interface: {interface}");
                 }
                 wl_registry::Event::GlobalRemove { name: _ } => {}
                 _ => {
@@ -121,7 +130,7 @@ pub mod dispatcher {
             _conn: &Connection,
             _qhandle: &QueueHandle<WaylandState>,
         ) {
-            println!("{_proxy:?}");
+            debug_println!("{_proxy:?}");
         }
     }
 
@@ -315,7 +324,7 @@ pub mod dispatcher {
                     }
                 }
                 EventType::Name { name } => {
-                    println!("WlSeat: Registered seat with name '{name}'");
+                    debug_println!("WlSeat: Registered seat with name '{name}'");
                 }
                 _ => {
                     unreachable!()
@@ -343,7 +352,7 @@ pub mod dispatcher {
                         .unwrap();
                 }
                 _ => {
-                    println!("WlSurface: {:?}", event);
+                    debug_println!("WlSurface: {:?}", event);
                 }
             }
         }
@@ -367,7 +376,7 @@ pub mod dispatcher {
                     state.pending_data_amount -= 1;
                 }
                 _ => {
-                    println!("WlOutput: {:?}", event);
+                    debug_println!("WlOutput: {:?}", event);
                 }
             }
         }
