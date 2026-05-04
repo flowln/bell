@@ -1,6 +1,6 @@
 # bell
 
-Lightweight notification daemon for Wayland systems.
+Lightweight notification application for Wayland systems.
 
 ## Table of contents
 
@@ -9,6 +9,7 @@ Lightweight notification daemon for Wayland systems.
   - [Quickstart](#quickstart)
   - [Configuration](#configuration)
     - [Configuration file format](#configuration-file-format)
+  - [References](#references)
 
 ## Quickstart
 
@@ -124,3 +125,21 @@ right = 2
 bottom = 2
 left = 2
 ```
+
+## References
+
+This project was heavily inspired by [mako](https://github.com/emersion/mako), an amazing notification daemon for Wayland systems.
+In fact, I've only started working on this project because I wanted to specify per-output options, and it seemed like a good motivator for learning Rust!
+
+The application is intended to be compatible with the latest Desktop Notification Specification (currently version 1.3), as specified by FreeDesktop.
+
+The reference documentation can be found [here](https://specifications.freedesktop.org/notification/latest/index.html#introduction).
+
+While striving to be as independent and self-sufficient as possible, this project does make use of some third-party crates for some of the implemented functionality:
+
+- [dbus](https://crates.io/crates/dbus) / [dbus-crossroads](https://crates.io/crates/dbus-crossroads/): DBus integration for interacting with the notification system.
+- [wayland-client](https://crates.io/crates/wayland-client) and protocol friends: Wayland integration.
+- [serde](https://crates.io/crates/serde) / [toml](https://crates.io/crates/toml): Deserialization of the configuration file.
+- [libc](https://crates.io/crates/libc): Low-level interface to some required facilities (like `epoll` or `shm_open`).
+- [cosmic-text](https://crates.io/crates/cosmic-text): Text rendering facilities.
+- [png](https://crates.io/crates/png): Decoding of PNG icons.
