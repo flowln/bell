@@ -109,7 +109,7 @@ fn render(
     }
 
     if let Some(border_color) = spec.border_color {
-        renderer.draw_border(spec.border_size?, border_color);
+        renderer.draw_border(spec.border_size?, spec.border_radius, border_color);
     }
 
     Some(())

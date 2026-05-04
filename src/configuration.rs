@@ -138,6 +138,8 @@ pub struct OutputConfiguration {
     pub border_color: Option<Color>,
     #[serde(default)]
     pub border_size: Option<usize>,
+    #[serde(default)]
+    pub border_radius: Option<usize>,
 
     #[serde(deserialize_with = "deserialize_anchor")]
     #[serde(default)]
@@ -168,7 +170,7 @@ impl OutputConfiguration {
         with_other!(self, other, font_size text_color);
         with_other!(self, other, background_color);
         with_other_owned!(self, other, icon_theme);
-        with_other!(self, other, border_color border_size);
+        with_other!(self, other, border_color border_size border_radius);
         with_other!(self, other, anchor direction layer margins);
     }
 
@@ -255,6 +257,7 @@ impl Default for OutputConfiguration {
             icon_theme: Some("Adwaita".to_owned()), // FIXME: Maybe we should instead leave it as None by default?
             border_color: Some(Color::rgba(0x00, 0x00, 0x00, 0xFF)),
             border_size: Some(0),
+            border_radius: Some(4),
             anchor: Some(Anchor::Right | Anchor::Bottom),
             direction: Some(GrowthDirection::default()),
             layer: Some(Layer::Top),

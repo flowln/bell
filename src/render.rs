@@ -6,12 +6,6 @@ macro_rules! with_scale {
     ( $self:expr,$( $x:expr ),+ ) => { ($( ($x as usize) * $self.buffer_scale, )+ )};
 }
 
-macro_rules! read_unaligned_u8 {
-    ($src:ident $fixed_offset:ident $offset:literal) => {
-        (($src >> ($fixed_offset + $offset)) & 0x00000000000000FF) as u8;
-    };
-}
-
 fn blend_colors(first_color: Color, second_color: Color) -> Color {
     let a_first = f32::from(first_color.a());
     let a_second = f32::from(second_color.a());
@@ -47,11 +41,12 @@ pub mod render {
     use std::fmt;
     use std::io::{Error, ErrorKind};
     use std::path::PathBuf;
-    use std::ptr::addr_of_mut;
 
     use png::{ColorType, OutputInfo};
 
     use crate::render::{blend_colors, text::*};
+
+    const PI_2: f32 = 2.0 * std::f32::consts::PI;
 
     #[derive(Debug)]
     pub struct DrawPNGError<'a>(String, &'a OutputInfo);
@@ -59,36 +54,6 @@ pub mod render {
     impl fmt::Display for DrawPNGError<'_> {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "{} - {:?}", self.0, self.1)
-        }
-    }
-
-    struct ScalingGuard {
-        renderer: *mut Renderer,
-
-        old_scale_factor: usize,
-    }
-
-    impl ScalingGuard {
-        pub fn new(renderer: &mut Renderer, scale_factor: usize) -> ScalingGuard {
-            let old_scale_factor = renderer.buffer_scale;
-            renderer.buffer_scale *= scale_factor;
-
-            ScalingGuard {
-                renderer: addr_of_mut!(*renderer),
-                old_scale_factor,
-            }
-        }
-    }
-
-    impl Drop for ScalingGuard {
-        fn drop(&mut self) {
-            let renderer = unsafe {
-                self.renderer
-                    .as_mut()
-                    .expect("Failed to borrow the renderer when destroying ScalingGuard.")
-            };
-
-            renderer.buffer_scale = self.old_scale_factor;
         }
     }
 
@@ -404,25 +369,147 @@ pub mod render {
             Ok(())
         }
 
-        pub fn draw_rect(&mut self, x: i32, y: i32, width: usize, height: usize, color: Color) {
-            let (x, y) = self.wrap_position(x, y);
-
-            self.draw_rect_with_scale(x, y, width, height, None, None, color);
-        }
-
-        pub fn draw_border(&mut self, size: usize, color: Color) {
+        pub fn draw_border(&mut self, size: usize, radius: Option<usize>, color: Color) {
             let width = self.width;
             let height = self.height;
 
+            let radius = radius.unwrap_or(0);
+            let radius_i = radius as i32;
+
             // Top
-            self.draw_rect(0, 0, width, size, color);
+            self.draw_rect(radius_i, 0, width - 2 * radius, size, color);
             // Bottom
-            self.draw_rect(size as i32, -(size as i32), width - 2 * size, size, color);
+            self.draw_rect(radius_i, -(size as i32), width - 2 * radius, size, color);
 
             // Left
-            self.draw_rect(0, size as i32, size, height - 2 * size, color);
+            self.draw_rect(0, radius_i, size, height - 2 * radius, color);
             // Right
-            self.draw_rect(-(size as i32), size as i32, size, height - 2 * size, color);
+            self.draw_rect(-(size as i32), radius_i, size, height - 2 * radius, color);
+
+            if radius != 0 {
+                use std::f32::consts as Constant;
+
+                let transparent = Color::rgba(0, 0, 0, 0);
+                let (n_radius_x, n_radius_y) = self.wrap_position(-radius_i, -radius_i);
+                self.draw_rect_with_scale(0, 0, radius, radius, None, None, transparent, false);
+                self.draw_rect_with_scale(
+                    n_radius_x,
+                    0,
+                    radius,
+                    radius,
+                    None,
+                    None,
+                    transparent,
+                    false,
+                );
+                self.draw_rect_with_scale(
+                    0,
+                    n_radius_y,
+                    radius,
+                    radius,
+                    None,
+                    None,
+                    transparent,
+                    false,
+                );
+                self.draw_rect_with_scale(
+                    n_radius_x,
+                    n_radius_y,
+                    radius,
+                    radius,
+                    None,
+                    None,
+                    transparent,
+                    false,
+                );
+
+                self.draw_arc(
+                    radius_i,
+                    radius_i,
+                    radius,
+                    Constant::FRAC_PI_2,
+                    Constant::PI,
+                    size as f32,
+                    self.clear_color,
+                    color,
+                );
+                self.draw_arc(
+                    -radius_i,
+                    radius_i,
+                    radius,
+                    0.0,
+                    Constant::FRAC_PI_2,
+                    size as f32,
+                    self.clear_color,
+                    color,
+                );
+                self.draw_arc(
+                    radius_i,
+                    -radius_i,
+                    radius,
+                    Constant::PI,
+                    3.0 * Constant::FRAC_PI_2,
+                    size as f32,
+                    self.clear_color,
+                    color,
+                );
+                self.draw_arc(
+                    -radius_i,
+                    -radius_i,
+                    radius,
+                    3.0 * Constant::FRAC_PI_2,
+                    PI_2,
+                    size as f32,
+                    self.clear_color,
+                    color,
+                );
+            }
+        }
+
+        pub fn draw_arc(
+            &mut self,
+            center_x: i32,
+            center_y: i32,
+            radius: usize,
+            start_angle: f32,
+            end_angle: f32,
+            border_size: f32,
+            fill_color: Color,
+            border_color: Color,
+        ) {
+            let radius = radius as i32;
+            let radius_sq = radius.saturating_pow(2);
+
+            for y in (-radius)..(radius + 1) {
+                for x in (-radius)..(radius + 1) {
+                    let distance_sq = x.saturating_pow(2) + y.saturating_pow(2);
+                    if distance_sq >= radius_sq {
+                        continue;
+                    }
+
+                    // x = r * cos(th) | y = - r * sin(th) => tan(th) = - y / x => th = atan(- y / x)
+                    let angle = (f32::atan2(-y as f32, x as f32) + PI_2).rem_euclid(PI_2);
+
+                    if angle < start_angle || angle > end_angle {
+                        continue;
+                    }
+
+                    let (x_point, y_point) = self.wrap_position(x + center_x, y + center_y);
+                    if radius as f32 - (distance_sq as f32).sqrt() <= border_size {
+                        // Close to the border
+                        self.draw_point_with_scale(x_point, y_point, None, None, border_color);
+                    } else {
+                        // Inside the arc
+                        self.draw_point_with_scale(x_point, y_point, None, None, fill_color);
+                    }
+                }
+            }
+        }
+
+        pub fn draw_rect(&mut self, x: i32, y: i32, width: usize, height: usize, color: Color) {
+            let (x, y) = self.wrap_position(x, y);
+
+            self.draw_rect_with_scale(x, y, width, height, None, None, color, true);
         }
 
         pub fn clear(&mut self, color: Option<Color>) {
@@ -446,6 +533,7 @@ pub mod render {
                 width_scale,
                 height_scale,
                 color,
+                true,
             );
         }
 
@@ -458,6 +546,7 @@ pub mod render {
             width_scale: Option<f32>,
             height_scale: Option<f32>,
             mut color: Color,
+            blend_with_previous_color: bool,
         ) {
             let width_scale = width_scale.unwrap_or(1.0);
             let height_scale = height_scale.unwrap_or(1.0);
@@ -474,7 +563,7 @@ pub mod render {
                     * x_original.saturating_add(scale_end(width_scale, width_original));
                 for x in x_start..x_end {
                     let offset = y * self.backing_store_stride + x;
-                    if color.a() != 0xFF {
+                    if blend_with_previous_color && color.a() != 0xFF {
                         color = blend_colors(Color(self.backing_store[offset]), color)
                     }
 
@@ -495,7 +584,7 @@ pub mod render {
 
 pub mod text {
     pub use crate::render::{Attrs, Color, Metrics};
-    use cosmic_text::{Buffer, FontSystem, LayoutLine, PhysicalGlyph, Shaping, SwashCache};
+    use cosmic_text::{Buffer, FontSystem, Shaping, SwashCache};
 
     pub struct TextRenderOptions<'a> {
         pub text_attributes: Attrs<'a>,
