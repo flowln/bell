@@ -95,7 +95,7 @@ fn render(
         x_consumed = x_consumed.max(width + 2 * padding_x);
     }
 
-    let default_text_opts = render::text::TextRenderOptions::new();
+    let default_text_opts = render::text::Attrs::new();
 
     let mut text_span_fragment_holder = Vec::<String>::new();
     let mut text_span = Vec::<(&str, Attrs)>::new();
@@ -103,11 +103,7 @@ fn render(
     spec.get_message_layout(|text_fragment, font_size, text_color| {
         // NOTE: Arbitrary values to make a reasonable line height.
         let metrics = Metrics::new(font_size, font_size + 6.0f32.min(font_size * 0.3));
-        let attrs = default_text_opts
-            .text_attributes
-            .clone()
-            .metrics(metrics)
-            .color(text_color);
+        let attrs = default_text_opts.clone().metrics(metrics).color(text_color);
 
         match text_fragment {
             "app_name" => text_span.push((notification.app_name.as_str(), attrs)),
@@ -200,8 +196,10 @@ fn process_surface(
                 );
             }
 
-            use wayland::SurfaceBackend;
-            if let SurfaceBackend::Wlr(wlr_surface) = &mut surface.backend {
+            {
+                use wayland::SurfaceBackend;
+                let SurfaceBackend::Wlr(wlr_surface) = &mut surface.backend;
+
                 let original_margins = output_spec.margins?;
                 let margins = match output_spec.direction? {
                     GrowthDirection::Up => original_margins.with_bottom(offset),
@@ -258,7 +256,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut options = ApplicationOptions::default();
     let mut args_iter = arguments.into_iter();
-    args_iter.next();  // Skip application name argument.
+    args_iter.next(); // Skip application name argument.
     while let Some(argument) = args_iter.next() {
         match argument.as_str() {
             "-c" | "--config" => {
@@ -290,11 +288,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     use std::path::PathBuf;
     let configuration = match options.config_path {
-        None => Configuration::from_default_paths().unwrap_or_else(|err| {
-            eprintln!("Could not find a valid configuration file! Using the default configuration.");
+        None => Configuration::from_default_paths().unwrap_or_else(|_err| {
+            eprintln!(
+                "Could not find a valid configuration file! Using the default configuration."
+            );
             Configuration::default()
         }),
-        Some(path_str) => Configuration::from_file(PathBuf::from(path_str).as_path())?
+        Some(path_str) => Configuration::from_file(PathBuf::from(path_str).as_path())?,
     };
     let event_handler = configuration.get_event_handler();
 

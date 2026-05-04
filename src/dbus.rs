@@ -176,7 +176,7 @@ fn handle_notify_message(
 
     if let Some(image_data) = input.hints.get("image-data") {
         notification.image_data = parse_image_data_struct(&image_data.0);
-    } else if let Some(image_path) = input.hints.get("image-path") {
+    } else if let Some(_image_path) = input.hints.get("image-path") {
         todo!();
     } else if let Some(icon_data) = input.hints.get("icon_data") {
         notification.image_data = parse_image_data_struct(&icon_data.0);

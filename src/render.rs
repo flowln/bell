@@ -105,22 +105,6 @@ pub mod render {
             self.backing_store_stride = self.width * self.buffer_scale;
         }
 
-        /// Draws a string of text to the backing store.
-        ///
-        /// The x and y coordinates are surface-local coordinates representing the
-        /// top-left corner from which text rendering will start.
-        pub fn draw_text(
-            &mut self,
-            text: &String,
-            x: i32,
-            y: i32,
-            color: Color,
-            options: TextRenderOptions,
-        ) {
-            self.text_renderer
-                .draw_text(&mut self.backing_store, text, x, y, color, options);
-        }
-
         /// Draws a series of strings of text to the backing store with per-item customization.
         ///
         /// The x and y coordinates are surface-local coordinates representing the
@@ -131,7 +115,7 @@ pub mod render {
             x: i32,
             y: i32,
             max_width: usize,
-            options: TextRenderOptions,
+            default_options: Attrs<'a>,
         ) {
             self.text_renderer.draw_text_spans(
                 &mut self.backing_store,
@@ -139,7 +123,7 @@ pub mod render {
                 x,
                 y,
                 max_width,
-                options,
+                default_options,
             );
         }
 
@@ -505,7 +489,6 @@ pub mod render {
                         }
                     }
 
-
                     let (x_point, y_point) = self.wrap_position(x + center_x, y + center_y);
                     if radius as f32 - (distance_sq as f32).sqrt() <= border_size {
                         // Close to the border
@@ -598,25 +581,6 @@ pub mod text {
     pub use crate::render::{Attrs, Color, Metrics};
     use cosmic_text::{Buffer, FontSystem, Shaping, SwashCache};
 
-    pub struct TextRenderOptions<'a> {
-        pub text_attributes: Attrs<'a>,
-
-        /// Margin from the top or bottom of a glyph to the line boundary.
-        pub line_height_margin: f32,
-        /// Height in pixels of each glyph.
-        pub font_size: f32,
-    }
-
-    impl TextRenderOptions<'_> {
-        pub fn new() -> TextRenderOptions<'static> {
-            TextRenderOptions {
-                text_attributes: Attrs::new(),
-                line_height_margin: 4.,
-                font_size: 12.,
-            }
-        }
-    }
-
     pub struct TextRenderer {
         pub width: usize,
         pub height: usize,
@@ -648,51 +612,6 @@ pub mod text {
             renderer
         }
 
-        pub fn draw_text(
-            &mut self,
-            backend: &mut [u32],
-            text: &String,
-            x: i32,
-            y: i32,
-            color: Color,
-            options: TextRenderOptions,
-        ) {
-            let metrics = Metrics::new(
-                options.font_size,
-                options.font_size + 2.0 * options.line_height_margin,
-            );
-            let metrics = self.scale_metrics(metrics);
-
-            let buffer = self.buffer.as_mut().unwrap();
-            let current_metrics = buffer.metrics();
-
-            if current_metrics != metrics {
-                buffer.set_metrics(metrics);
-            }
-
-            let mut buffer = buffer.borrow_with(&mut self.font_system);
-            buffer.set_size(
-                Some(f32::from(self.width as u16 * self.buffer_scale as u16)),
-                Some(f32::from(self.height as u16 * self.buffer_scale as u16)),
-            );
-
-            buffer.set_text(text, &options.text_attributes, Shaping::Advanced, None);
-
-            let callback = |x_glyph, y_glyph, w, h, c| {
-                TextRenderer::draw_callback(
-                    backend,
-                    with_scale!(self, self.width),
-                    (x + x_glyph) as u32,
-                    (y + y_glyph) as u32,
-                    w,
-                    h,
-                    c,
-                )
-            };
-
-            buffer.draw(&mut self.swash_cache, color, callback);
-        }
-
         pub fn draw_text_spans<'a>(
             &mut self,
             backend: &mut [u32],
@@ -700,7 +619,7 @@ pub mod text {
             x: i32,
             y: i32,
             max_width: usize,
-            default_options: TextRenderOptions,
+            default_options: Attrs<'a>,
         ) {
             let str_spans = {
                 let attr_change = |attrs: &mut Attrs<'_>| {
@@ -727,12 +646,7 @@ pub mod text {
                 Some(f32::from((height - y) as u16)),
             );
 
-            buffer.set_rich_text(
-                str_spans,
-                &default_options.text_attributes,
-                Shaping::Advanced,
-                None,
-            );
+            buffer.set_rich_text(str_spans, &default_options, Shaping::Advanced, None);
 
             use cosmic_text::Wrap;
             buffer.set_wrap(Wrap::WordOrGlyph);

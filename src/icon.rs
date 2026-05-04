@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::fs::File;
 use std::io::{Error as IOError, ErrorKind as IOErrorKind};
 use std::path::PathBuf;
 use std::str::FromStr;
