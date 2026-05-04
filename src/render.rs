@@ -171,6 +171,48 @@ pub mod render {
                 .draw_text_spans(&mut self.backing_store, text_spans, x, y, options);
         }
 
+        pub fn draw_image(
+            &mut self,
+            x: i32,
+            y: i32,
+            width: usize,
+            height: usize,
+            image: &crate::dbus::ImageData,
+        ) {
+            let (x, y) = self.wrap_position(x, y);
+
+            let width_scale = (width as f32) / (image.width as f32);
+            let height_scale = (height as f32) / (image.height as f32);
+
+            for y_offset in 0..image.height {
+                let y_point = y + (y_offset as f32 * height_scale) as usize;
+                for x_offset in 0..image.width {
+                    let x_point = x + (x_offset as f32 * width_scale) as usize;
+
+                    let base_image_offset =
+                        (y_offset * image.rowstride + x_offset * image.channels) as usize;
+                    let r = image.data[base_image_offset];
+                    let g = image.data[base_image_offset + 1];
+                    let b = image.data[base_image_offset + 2];
+                    let a = if image.has_alpha {
+                        image.data[base_image_offset + 3]
+                    } else {
+                        0xFF
+                    };
+
+                    let color = Color::rgba(r, g, b, a);
+
+                    self.draw_point_with_scale(
+                        x_point,
+                        y_point,
+                        Some(width_scale),
+                        Some(height_scale),
+                        color,
+                    );
+                }
+            }
+        }
+
         pub fn draw_png(
             &mut self,
             x: i32,
@@ -453,7 +495,7 @@ pub mod render {
 
 pub mod text {
     pub use crate::render::{Attrs, Color, Metrics};
-    use cosmic_text::{Buffer, FontSystem, Shaping, SwashCache};
+    use cosmic_text::{Buffer, FontSystem, LayoutLine, PhysicalGlyph, Shaping, SwashCache};
 
     pub struct TextRenderOptions<'a> {
         pub text_attributes: Attrs<'a>,
@@ -575,6 +617,14 @@ pub mod text {
                 .as_mut()
                 .unwrap()
                 .borrow_with(&mut self.font_system);
+
+            let (x, y) = with_scale!(self, x, y);
+            let (width, height) = with_scale!(self, self.width, self.height);
+            buffer.set_size(
+                Some(f32::from((width - x) as u16)),
+                Some(f32::from((height - y) as u16)),
+            );
+
             buffer.set_rich_text(
                 str_spans,
                 &default_options.text_attributes,
@@ -582,12 +632,12 @@ pub mod text {
                 None,
             );
 
-            let callback = |x_glyph, y_glyph, w, h, c| {
+            let mut callback = |x_glyph, y_glyph, w, h, c| {
                 TextRenderer::draw_callback(
                     backend,
                     with_scale!(self, self.width),
-                    (x + x_glyph) as u32,
-                    (y + y_glyph) as u32,
+                    (x + x_glyph as usize) as u32,
+                    (y + y_glyph as usize) as u32,
                     w,
                     h,
                     c,
@@ -597,13 +647,13 @@ pub mod text {
             buffer.draw(
                 &mut self.swash_cache,
                 Color::rgb(0x00, 0x00, 0x00),
-                callback,
+                &mut callback,
             );
         }
 
         fn draw_callback(
             backend: &mut [u32],
-            width: usize,
+            backend_stride: usize,
             x: u32,
             y: u32,
             glyph_width: u32,
@@ -615,7 +665,7 @@ pub mod text {
             for idy in 0..glyph_height {
                 for idx in 0..glyph_width {
                     // NOTE: We let it overflow naturally, as we check it against buffer_size right after.
-                    let index = ((y + idy) * (width as u32) + (x + idx)) as usize;
+                    let index = ((y + idy) * (backend_stride as u32) + (x + idx)) as usize;
                     if index >= buffer_size {
                         continue;
                     }

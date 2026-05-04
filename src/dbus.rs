@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use dbus::Message;
-use dbus::arg::PropMap;
+use dbus::arg::{PropMap, RefArg};
 use dbus::blocking::Connection;
 use dbus_crossroads::{Context, Crossroads, MethodErr};
 
@@ -11,9 +11,10 @@ use crate::notification::{
 
 macro_rules! create_struct_tuple_pair {
     ($visibility:vis $struct_name:ident $type_name:ident $( $field_name:ident:$field_type:ty ) +) => {
+        #[derive(Debug)]
         $visibility struct $struct_name {
             $(
-                $field_name: $field_type,
+                $visibility $field_name: $field_type,
             )*
         }
 
@@ -173,23 +174,29 @@ fn handle_notify_message(
         notification.app_icon = Some(input.app_icon);
     }
 
+    if let Some(image_data) = input.hints.get("image-data") {
+        notification.image_data = parse_image_data_struct(&image_data.0);
+    } else if let Some(image_path) = input.hints.get("image-path") {
+        todo!();
+    } else if let Some(icon_data) = input.hints.get("icon_data") {
+        notification.image_data = parse_image_data_struct(&icon_data.0);
+    }
+
     // The timeout time in milliseconds since the display of the notification at which
     // the notification should automatically close.
     notification.expire_timeout = {
         if input.expire_timeout < 0 {
             // If -1, the notification's expiration time is dependent on the notification server's settings,
             // and may vary for the type of notification.
-            todo!();
-        }
-        let timeout = input.expire_timeout as u64;
-
-        if timeout == 0 {
-            //  If 0, never expire.
-            None
+            Some(std::time::Duration::MAX)
         } else {
-            Some(std::time::Duration::from_millis(
-                input.expire_timeout as u64,
-            ))
+            let timeout = input.expire_timeout as u64;
+            if timeout == 0 {
+                //  If 0, never expire.
+                None
+            } else {
+                Some(std::time::Duration::from_millis(timeout))
+            }
         }
     };
 
@@ -218,4 +225,40 @@ fn handle_notify_message(
     }
 
     Ok(id)
+}
+
+macro_rules! extract_field {
+    ($source:ident $index:literal $type:ty ) => {
+        *$source
+            .as_static_inner($index)?
+            .as_any()
+            .downcast_ref::<$type>()?
+    };
+}
+
+fn parse_image_data_struct(raw_data: &Box<dyn RefArg>) -> Option<ImageData> {
+    let width = extract_field!(raw_data 0 i32);
+    let height = extract_field!(raw_data 1 i32);
+    let rowstride = extract_field!(raw_data 2 i32);
+    let has_alpha = extract_field!(raw_data 3 bool);
+    let bits_per_sample = extract_field!(raw_data 4 i32);
+    let channels = extract_field!(raw_data 5 i32);
+
+    let data = raw_data
+        .as_static_inner(6)?
+        .as_iter()?
+        .map(|arg| arg.as_i64().unwrap_or(0) as u8)
+        .collect();
+
+    let parsed = ImageData {
+        width,
+        height,
+        rowstride,
+        has_alpha,
+        bits_per_sample,
+        channels,
+        data,
+    };
+
+    Some(parsed)
 }

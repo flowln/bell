@@ -1,4 +1,5 @@
 use crate::configuration::{Configuration, EventResponse, OutputConfiguration};
+use crate::dbus::ImageData;
 use crate::wayland::{SurfaceBackend, SurfaceID, wayland_state_read, wayland_state_write};
 
 use std::collections::{BTreeMap, HashMap};
@@ -11,6 +12,7 @@ pub struct Notification {
     pub body: String,
 
     pub app_icon: Option<String>,
+    pub image_data: Option<ImageData>,
 
     pub is_dirty: bool,
 
@@ -28,6 +30,7 @@ impl Notification {
             summary,
             body,
             app_icon: None,
+            image_data: None,
             is_dirty: true,
             creation_time: time::Instant::now(),
             expire_timeout: None,
@@ -129,8 +132,17 @@ impl Notification {
     }
 
     pub fn has_timed_out(&self) -> bool {
+        use std::time::Duration;
         match self.expire_timeout {
-            Some(timeout) => self.creation_time.elapsed() > timeout,
+            Some(timeout) => {
+                if timeout == Duration::MAX {
+                    // Application-defined behavior
+                    // TODO: Check desktop idle status
+                    self.creation_time.elapsed() > Duration::from_secs(5)
+                } else {
+                    self.creation_time.elapsed() > timeout
+                }
+            }
             None => false,
         }
     }

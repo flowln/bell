@@ -33,6 +33,21 @@ fn render(
     notification: &Notification,
     spec: &OutputConfiguration,
 ) -> Option<()> {
+    let mut x_offset = 20;
+
+    if let Some(image_data) = notification.image_data.as_ref() {
+        let (width, height) = (renderer.height - 40, renderer.height - 40);
+        renderer.draw_image(
+            x_offset,
+            (renderer.height as i32 / 2) - height as i32 / 2,
+            width,
+            height,
+            image_data,
+        );
+
+        x_offset += width as i32 + x_offset;
+    }
+
     let default_text_opts = render::text::TextRenderOptions::new();
 
     let mut text_span_fragment_holder = Vec::<String>::new();
@@ -65,7 +80,7 @@ fn render(
         }
     });
 
-    renderer.draw_text_spans(text_span, 10, 10, default_text_opts);
+    renderer.draw_text_spans(text_span, x_offset, 10, default_text_opts);
 
     if let Some(app_icon) = &notification.app_icon {
         let preferred_icon_size = icon::IconSize { size: 16, scale: 1 };
