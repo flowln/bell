@@ -5,20 +5,19 @@ use dbus::arg::PropMap;
 use dbus::blocking::Connection;
 use dbus_crossroads::{Context, Crossroads, MethodErr};
 
-use crate::notification::{Notification, NotificationCloseReason, NotificationError, notification_manager_write};
+use crate::notification::{
+    Notification, NotificationCloseReason, NotificationError, notification_manager_write,
+};
 
-#[macro_export]
-macro_rules! create_dbus_wrapper {
-    (@as_str_ref $id:ident) => {&'static str};
-
-    ($struct_name:ident $type_name:ident $parameter_list_name:ident $( $field_name:ident:$field_type:ty ) +) => {
-        struct $struct_name {
+macro_rules! create_struct_tuple_pair {
+    ($visibility:vis $struct_name:ident $type_name:ident $( $field_name:ident:$field_type:ty ) +) => {
+        $visibility struct $struct_name {
             $(
                 $field_name: $field_type,
             )*
         }
 
-        type $type_name = ($( $field_type, )*);
+        $visibility type $type_name = ($( $field_type, )*);
 
         impl From<$type_name> for $struct_name {
             fn from(input: $type_name) -> $struct_name {
@@ -37,6 +36,14 @@ macro_rules! create_dbus_wrapper {
                 ( $( input.$field_name, )+ )
             }
         }
+    }
+}
+
+macro_rules! create_dbus_wrapper {
+    (@as_str_ref $id:ident) => {&'static str};
+
+    ($struct_name:ident $type_name:ident $parameter_list_name:ident $( $field_name:ident:$field_type:ty ) +) => {
+        create_struct_tuple_pair!($struct_name $type_name $( $field_name:$field_type )+);
 
         const $parameter_list_name: ( $( create_dbus_wrapper!(@as_str_ref $field_name), )+ ) = ( $( stringify!($field_name), )+ );
     };
@@ -54,6 +61,9 @@ const SERVER_NAME: &'static str = env!("CARGO_PKG_NAME");
 const SERVER_VENDOR: &'static str = "Sofia & Bell";
 const SERVER_VERSION: &'static str = env!("CARGO_PKG_VERSION");
 const SERVER_SPEC_VERSION: &'static str = "1.3";
+
+// https://specifications.freedesktop.org/notification/latest/icons-and-images.html#icons-and-images-formats
+create_struct_tuple_pair!(pub ImageData ImageDataTuple width:i32 height:i32 rowstride:i32 has_alpha:bool bits_per_sample:i32 channels:i32 data:Vec<u8>);
 
 struct DBusData;
 
@@ -108,7 +118,9 @@ pub fn create_connection() -> Result<Connection, Box<dyn Error>> {
             move |_ctx: &mut Context, _data: &mut DBusData, (id,): (u32,)| {
                 let mut notification_manager = notification_manager_write();
 
-                match notification_manager.close_notification(id, NotificationCloseReason::Requested) {
+                match notification_manager
+                    .close_notification(id, NotificationCloseReason::Requested)
+                {
                     Ok(_) => Ok(()),
                     Err(NotificationError::InvalidID) => Err(MethodErr::invalid_arg(&id)),
                 }
@@ -128,12 +140,17 @@ pub fn create_connection() -> Result<Connection, Box<dyn Error>> {
     Ok(connection)
 }
 
-pub fn emit_notification_closed(connection: &mut Connection, id: u32, reason: u32) -> Result<u32, ()>{
+pub fn emit_notification_closed(
+    connection: &mut Connection,
+    id: u32,
+    reason: u32,
+) -> Result<u32, ()> {
     let mut message = Message::new_signal(
         NOTIFICATION_BUS_OBJECT_PATH,
         NOTIFICATION_BUS_INTERFACE_NAME,
         "CloseNotification",
-    ).unwrap();
+    )
+    .unwrap();
 
     message.append_all((id, reason as u32));
 
@@ -149,6 +166,12 @@ fn handle_notify_message(
     let input = NotifyMessageInput::from(input);
 
     let mut notification = Notification::new(input.app_name, input.summary, input.body);
+
+    // The optional program icon of the calling application.
+    // Can be an empty string, indicating no icon.
+    if !input.app_icon.is_empty() {
+        notification.app_icon = Some(input.app_icon);
+    }
 
     // The timeout time in milliseconds since the display of the notification at which
     // the notification should automatically close.

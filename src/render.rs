@@ -2,7 +2,14 @@ pub use cosmic_text::{Attrs, Color, Metrics};
 
 #[macro_export]
 macro_rules! with_scale {
-    ( $self:expr,$x:expr ) => {{ ($x as usize) * $self.buffer_scale }};
+    ( $self:expr,$x:expr ) => { ($x as usize) * $self.buffer_scale };
+    ( $self:expr,$( $x:expr ),+ ) => { ($( ($x as usize) * $self.buffer_scale, )+ )};
+}
+
+macro_rules! read_unaligned_u8 {
+    ($src:ident $fixed_offset:ident $offset:literal) => {
+        (($src >> ($fixed_offset + $offset)) & 0x00000000000000FF) as u8;
+    };
 }
 
 fn blend_colors(first_color: Color, second_color: Color) -> Color {
@@ -37,10 +44,57 @@ fn blend_colors(first_color: Color, second_color: Color) -> Color {
 }
 
 pub mod render {
-    use crate::render::text::*;
+    use std::fmt;
+    use std::io::{Error, ErrorKind};
+    use std::path::PathBuf;
+    use std::ptr::addr_of_mut;
+
+    use png::{ColorType, OutputInfo};
+
+    use crate::render::{blend_colors, text::*};
+
+    #[derive(Debug)]
+    pub struct DrawPNGError<'a>(String, &'a OutputInfo);
+
+    impl fmt::Display for DrawPNGError<'_> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{} - {:?}", self.0, self.1)
+        }
+    }
+
+    struct ScalingGuard {
+        renderer: *mut Renderer,
+
+        old_scale_factor: usize,
+    }
+
+    impl ScalingGuard {
+        pub fn new(renderer: &mut Renderer, scale_factor: usize) -> ScalingGuard {
+            let old_scale_factor = renderer.buffer_scale;
+            renderer.buffer_scale *= scale_factor;
+
+            ScalingGuard {
+                renderer: addr_of_mut!(*renderer),
+                old_scale_factor,
+            }
+        }
+    }
+
+    impl Drop for ScalingGuard {
+        fn drop(&mut self) {
+            let renderer = unsafe {
+                self.renderer
+                    .as_mut()
+                    .expect("Failed to borrow the renderer when destroying ScalingGuard.")
+            };
+
+            renderer.buffer_scale = self.old_scale_factor;
+        }
+    }
 
     pub struct Renderer {
         backing_store: Vec<u32>,
+        backing_store_stride: usize,
 
         pub width: usize,
         pub height: usize,
@@ -57,6 +111,7 @@ pub mod render {
 
             Renderer {
                 backing_store: vec![0; width * height],
+                backing_store_stride: width,
                 width,
                 height,
                 buffer_scale: 1,
@@ -67,26 +122,6 @@ pub mod render {
 
         pub fn get_backing_store(&mut self) -> &mut [u32] {
             self.backing_store.as_mut_slice()
-        }
-
-        pub fn set_width(&mut self, width: usize) {
-            self.width = width;
-            self.text_renderer.width = width;
-
-            self.backing_store.resize(
-                width * self.height * (self.buffer_scale.pow(2)) as usize,
-                self.clear_color.0,
-            );
-        }
-
-        pub fn set_height(&mut self, height: usize) {
-            self.height = height;
-            self.text_renderer.height = height;
-
-            self.backing_store.resize(
-                self.width * height * (self.buffer_scale.pow(2)) as usize,
-                self.clear_color.0,
-            );
         }
 
         pub fn set_buffer_scale(&mut self, scale_factor: i32) {
@@ -101,6 +136,8 @@ pub mod render {
                 self.width * self.height * (self.buffer_scale.pow(2)) as usize,
                 self.clear_color.0,
             );
+
+            self.backing_store_stride = self.width * self.buffer_scale;
         }
 
         /// Draws a string of text to the backing store.
@@ -134,25 +171,201 @@ pub mod render {
                 .draw_text_spans(&mut self.backing_store, text_spans, x, y, options);
         }
 
-        pub fn draw_rect(&mut self, x: i32, y: i32, width: usize, height: usize, color: Color) {
-            let x = with_scale!(self, x as usize);
-            let y = with_scale!(self, y as usize);
+        pub fn draw_png(
+            &mut self,
+            x: i32,
+            y: i32,
+            width: usize,
+            height: usize,
+            path: &PathBuf,
+        ) -> Result<(), Error> {
+            let (x, y) = self.wrap_position(x, y);
 
-            let width = with_scale!(self, width);
-            let height = with_scale!(self, height);
+            use std::fs::File;
+            use std::io::BufReader;
+            let reader = BufReader::new(File::open(path)?);
 
-            let backend_width = with_scale!(self, self.width);
+            use png::{Decoder, Limits};
+            let limits = Limits {
+                bytes: width * height * 10,
+            }; // Allow at most 80 bits/pixel (max 64 bits/pixel + metadata).
+            let decoder = Decoder::new_with_limits(reader, limits);
 
-            let x_end = x.saturating_add(width);
-            assert!(x_end <= backend_width);
-            let y_end = y.saturating_add(height);
-            assert!(y_end <= with_scale!(self, self.height));
+            let mut image_reader = decoder.read_info()?;
 
-            for y_point in y..y_end {
-                for x_point in x..x_end {
-                    self.backing_store[y_point * backend_width + x_point] = color.0;
+            let required_buffer_size = image_reader
+                .output_buffer_size()
+                .ok_or(Error::from(ErrorKind::FileTooLarge))?;
+            let mut frame_data_buffer = vec![0u8; required_buffer_size];
+
+            let frame_information = image_reader.next_frame(&mut frame_data_buffer)?;
+
+            Ok(self
+                .draw_png_frame_to_buffer(
+                    x,
+                    y,
+                    width,
+                    height,
+                    &frame_data_buffer,
+                    &frame_information,
+                )
+                .unwrap())
+        }
+
+        fn draw_png_frame_to_buffer<'a>(
+            &mut self,
+            x: usize,
+            y: usize,
+            requested_width: usize,
+            requested_height: usize,
+            frame_data_buffer: &[u8],
+            frame_information: &'a OutputInfo,
+        ) -> Result<(), DrawPNGError<'a>> {
+            let buffer_point_to_pixel: Box<fn(u64, u8, u64) -> Color>;
+
+            match frame_information.color_type {
+                ColorType::Grayscale => {
+                    fn convert(raw_pixel_data: u64, _: u8, sample_bit_mask: u64) -> Color {
+                        let value = (raw_pixel_data & sample_bit_mask) as u8;
+
+                        Color::rgba(value, value, value, 0xFF)
+                    }
+
+                    buffer_point_to_pixel = Box::new(convert);
+                }
+                ColorType::Rgb => {
+                    fn convert(
+                        raw_pixel_data: u64,
+                        sample_bit_depth: u8,
+                        sample_bit_mask: u64,
+                    ) -> Color {
+                        let r = ((raw_pixel_data & (sample_bit_mask << 0 * sample_bit_depth))
+                            >> 0 * sample_bit_depth) as u8;
+                        let g = ((raw_pixel_data & (sample_bit_mask << 1 * sample_bit_depth))
+                            >> 1 * sample_bit_depth) as u8;
+                        let b = ((raw_pixel_data & (sample_bit_mask << 2 * sample_bit_depth))
+                            >> 2 * sample_bit_depth) as u8;
+
+                        Color::rgba(r, g, b, 0xFF)
+                    }
+
+                    buffer_point_to_pixel = Box::new(convert);
+                }
+                ColorType::Indexed => {
+                    todo!()
+                }
+                ColorType::GrayscaleAlpha => {
+                    fn convert(
+                        raw_pixel_data: u64,
+                        sample_bit_depth: u8,
+                        sample_bit_mask: u64,
+                    ) -> Color {
+                        let value = ((raw_pixel_data & (sample_bit_mask << 0 * sample_bit_depth))
+                            >> 0 * sample_bit_depth) as u8;
+                        let alpha = ((raw_pixel_data & (sample_bit_mask << 1 * sample_bit_depth))
+                            >> 1 * sample_bit_depth) as u8;
+
+                        Color::rgba(value, value, value, alpha)
+                    }
+
+                    buffer_point_to_pixel = Box::new(convert);
+                }
+                ColorType::Rgba => {
+                    fn convert(
+                        raw_pixel_data: u64,
+                        sample_bit_depth: u8,
+                        sample_bit_mask: u64,
+                    ) -> Color {
+                        let r = ((raw_pixel_data & (sample_bit_mask << 0 * sample_bit_depth))
+                            >> 0 * sample_bit_depth) as u8;
+                        let g = ((raw_pixel_data & (sample_bit_mask << 1 * sample_bit_depth))
+                            >> 1 * sample_bit_depth) as u8;
+                        let b = ((raw_pixel_data & (sample_bit_mask << 2 * sample_bit_depth))
+                            >> 2 * sample_bit_depth) as u8;
+                        let a = ((raw_pixel_data & (sample_bit_mask << 3 * sample_bit_depth))
+                            >> 3 * sample_bit_depth) as u8;
+
+                        Color::rgba(r, g, b, a)
+                    }
+
+                    buffer_point_to_pixel = Box::new(convert);
                 }
             }
+
+            let sample_bit_depth = frame_information.bit_depth as u8;
+            let mut sample_bit_mask = u64::from((1u16 << sample_bit_depth) - 1);
+
+            if sample_bit_depth > 8 {
+                eprintln!(
+                    "Trying to decode a PNG file with {} bits/sample. Currently we can only support up to 8 bits/sample.",
+                    sample_bit_depth
+                );
+                eprintln!("Image bit values will be truncated to try displaying something at all.");
+
+                sample_bit_mask = 0x00000000_FFFFFFFF;
+            }
+
+            let bits_per_pixel =
+                frame_information.color_type.samples() * usize::from(sample_bit_depth);
+            assert!(bits_per_pixel <= 64);
+
+            let raw_value_from_offsets = |byte_offset: usize, bit_offset: usize| {
+                let mut value: u64 = 0;
+                let mut bits_parsed: i32 = -(bit_offset as i32);
+
+                let mut iteration = 0;
+                while bits_parsed < (bits_per_pixel as i32) {
+                    if byte_offset + iteration >= frame_data_buffer.len() {
+                        return None;
+                    }
+                    let partial = frame_data_buffer[byte_offset + iteration] as u64;
+                    value |= partial << 8 * iteration;
+
+                    bits_parsed += 8;
+                    iteration += 1;
+                }
+
+                // FIXME: Properly parse last 'bit_offset' bits when handling 64 bits/pixel data.
+                return Some(value >> bit_offset);
+            };
+
+            let buffer_width = frame_information.width as usize;
+            let buffer_height = frame_information.height as usize;
+
+            let x_scaling = (requested_width as f32) / (buffer_width as f32);
+            let y_scaling = (requested_height as f32) / (buffer_height as f32);
+
+            let frame_stride_bits = frame_information.line_size * 8;
+            for y_point in 0..buffer_height {
+                for x_point in 0..buffer_width {
+                    let buffer_offset_bits = y_point * frame_stride_bits + x_point * bits_per_pixel;
+
+                    let current_byte_offset = buffer_offset_bits.div_euclid(8);
+                    let current_bit_offset = buffer_offset_bits.rem_euclid(8);
+
+                    let raw_pixel_data =
+                        raw_value_from_offsets(current_byte_offset, current_bit_offset)
+                            .ok_or_else(|| DrawPNGError(format!("Failed to construct raw pixel data @ (x={} y={}) from bit offsets. Offsets: {} bytes / {} bits / {} total buffer size", x_point, y_point, current_byte_offset, current_bit_offset, frame_data_buffer.len()), &frame_information))?;
+                    let pixel_color =
+                        buffer_point_to_pixel(raw_pixel_data, sample_bit_depth, sample_bit_mask);
+
+                    self.draw_point_with_scale(
+                        x + (x_scaling * (x_point as f32)) as usize,
+                        y + (y_scaling * (y_point as f32)) as usize,
+                        Some(x_scaling),
+                        Some(y_scaling),
+                        pixel_color,
+                    );
+                }
+            }
+
+            Ok(())
+        }
+
+        pub fn draw_rect(&mut self, x: i32, y: i32, width: usize, height: usize, color: Color) {
+            let (x, y) = self.wrap_position(x, y);
+
+            self.draw_rect_with_scale(x, y, width, height, None, None, color);
         }
 
         pub fn draw_border(&mut self, size: usize, color: Color) {
@@ -162,29 +375,78 @@ pub mod render {
             // Top
             self.draw_rect(0, 0, width, size, color);
             // Bottom
-            self.draw_rect(
-                size as i32,
-                (self.height - size) as i32,
-                width - 2 * size,
-                size,
-                color,
-            );
+            self.draw_rect(size as i32, -(size as i32), width - 2 * size, size, color);
 
             // Left
             self.draw_rect(0, size as i32, size, height - 2 * size, color);
             // Right
-            self.draw_rect(
-                (self.width - size) as i32,
-                size as i32,
-                size,
-                height - 2 * size,
-                color,
-            );
+            self.draw_rect(-(size as i32), size as i32, size, height - 2 * size, color);
         }
 
         pub fn clear(&mut self, color: Option<Color>) {
             let color = color.unwrap_or(self.clear_color);
             self.backing_store.fill(color.0);
+        }
+
+        fn draw_point_with_scale(
+            &mut self,
+            x_original: usize,
+            y_original: usize,
+            width_scale: Option<f32>,
+            height_scale: Option<f32>,
+            color: Color,
+        ) {
+            self.draw_rect_with_scale(
+                x_original,
+                y_original,
+                1,
+                1,
+                width_scale,
+                height_scale,
+                color,
+            );
+        }
+
+        fn draw_rect_with_scale(
+            &mut self,
+            x_original: usize,
+            y_original: usize,
+            width_original: usize,
+            height_original: usize,
+            width_scale: Option<f32>,
+            height_scale: Option<f32>,
+            mut color: Color,
+        ) {
+            let width_scale = width_scale.unwrap_or(1.0);
+            let height_scale = height_scale.unwrap_or(1.0);
+
+            let scale_end =
+                |scale: f32, original: usize| (scale * f32::from(original as u16)).ceil() as usize;
+
+            let y_start = self.buffer_scale * y_original;
+            let y_end = self.buffer_scale
+                * y_original.saturating_add(scale_end(height_scale, height_original));
+            for y in y_start..y_end {
+                let x_start = self.buffer_scale * x_original;
+                let x_end = self.buffer_scale
+                    * x_original.saturating_add(scale_end(width_scale, width_original));
+                for x in x_start..x_end {
+                    let offset = y * self.backing_store_stride + x;
+                    if color.a() != 0xFF {
+                        color = blend_colors(Color(self.backing_store[offset]), color)
+                    }
+
+                    assert!(offset < self.backing_store.len());
+                    self.backing_store[offset] = color.0;
+                }
+            }
+        }
+
+        const fn wrap_position(&self, x: i32, y: i32) -> (usize, usize) {
+            let x = if x >= 0 { x } else { (self.width as i32) + x };
+            let y = if y >= 0 { y } else { (self.height as i32) + y };
+
+            (x as usize, y as usize)
         }
     }
 }

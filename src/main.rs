@@ -6,6 +6,7 @@ use wayland_client::backend::ObjectId;
 
 mod configuration;
 mod dbus;
+mod icon;
 mod lock;
 mod notification;
 mod render;
@@ -14,6 +15,7 @@ mod wayland;
 
 use crate::dbus as _dbus;
 use configuration::Configuration;
+use icon::retrieve_app_icon;
 use render::render::Renderer;
 use render::{Attrs, Metrics};
 
@@ -64,6 +66,32 @@ fn render(
     });
 
     renderer.draw_text_spans(text_span, 10, 10, default_text_opts);
+
+    if let Some(app_icon) = &notification.app_icon {
+        let preferred_icon_size = icon::IconSize { size: 16, scale: 1 };
+        let icon_information = retrieve_app_icon(
+            app_icon.as_str(),
+            spec.icon_theme.as_deref(),
+            preferred_icon_size,
+        )
+        .unwrap();
+
+        let size = icon_information
+            .icon_size
+            .unwrap_or(preferred_icon_size)
+            .scaled_size();
+
+        match icon_information.file_type {
+            icon::IconFileType::PNG => {
+                if let Err(error) =
+                    renderer.draw_png(-10 - (size as i32), 10, size, size, &icon_information.path)
+                {
+                    eprintln!("Error drawing PNG icon: {}", error);
+                }
+            }
+            _ => {}
+        }
+    }
 
     if let Some(border_color) = spec.border_color {
         renderer.draw_border(spec.border_size?, border_color);

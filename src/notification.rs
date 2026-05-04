@@ -10,6 +10,8 @@ pub struct Notification {
     pub summary: String,
     pub body: String,
 
+    pub app_icon: Option<String>,
+
     pub is_dirty: bool,
 
     creation_time: time::Instant,
@@ -25,6 +27,7 @@ impl Notification {
             app_name,
             summary,
             body,
+            app_icon: None,
             is_dirty: true,
             creation_time: time::Instant::now(),
             expire_timeout: None,
