@@ -130,10 +130,11 @@ pub mod render {
             text_spans: Vec<(&str, Attrs<'a>)>,
             x: i32,
             y: i32,
+            max_width: usize,
             options: TextRenderOptions,
         ) {
             self.text_renderer
-                .draw_text_spans(&mut self.backing_store, text_spans, x, y, options);
+                .draw_text_spans(&mut self.backing_store, text_spans, x, y, max_width, options);
         }
 
         pub fn draw_image(
@@ -687,6 +688,7 @@ pub mod text {
             mut text_spans: Vec<(&str, Attrs<'a>)>,
             x: i32,
             y: i32,
+            max_width: usize,
             default_options: TextRenderOptions,
         ) {
             let str_spans = {
@@ -708,9 +710,9 @@ pub mod text {
                 .borrow_with(&mut self.font_system);
 
             let (x, y) = with_scale!(self, x, y);
-            let (width, height) = with_scale!(self, self.width, self.height);
+            let (width, max_width, height) = with_scale!(self, self.width, max_width, self.height);
             buffer.set_size(
-                Some(f32::from((width - x) as u16)),
+                Some(f32::from(usize::min(width - x, max_width) as u16)),
                 Some(f32::from((height - y) as u16)),
             );
 
@@ -720,6 +722,9 @@ pub mod text {
                 Shaping::Advanced,
                 None,
             );
+
+            use cosmic_text::Wrap;
+            buffer.set_wrap(Wrap::WordOrGlyph);
 
             let mut callback = |x_glyph, y_glyph, w, h, c| {
                 TextRenderer::draw_callback(

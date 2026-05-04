@@ -33,19 +33,58 @@ fn render(
     notification: &Notification,
     spec: &OutputConfiguration,
 ) -> Option<()> {
-    let mut x_offset = 20;
+    let padding_x = 10usize;
+    let padding_y = 10usize;
+
+    let mut x_consumed = 0;
+    let mut y_offset = 0;
+
+    if let Some(app_icon) = &notification.app_icon {
+        let preferred_icon_size = icon::IconSize { size: 16, scale: 1 };
+        let icon_information = retrieve_app_icon(
+            app_icon.as_str(),
+            spec.icon_theme.as_deref(),
+            preferred_icon_size,
+        )
+        .unwrap();
+
+        let size = icon_information
+            .icon_size
+            .unwrap_or(preferred_icon_size)
+            .scaled_size();
+
+        let x_position = 0i32 - padding_x as i32 - size as i32;
+        let y_position = padding_y as i32;
+
+        match icon_information.file_type {
+            icon::IconFileType::PNG => {
+                if let Err(error) =
+                    renderer.draw_png(x_position, y_position, size, size, &icon_information.path)
+                {
+                    eprintln!("Error drawing PNG icon: {}", error);
+                }
+            }
+            _ => {}
+        }
+
+        y_offset += size;
+    }
 
     if let Some(image_data) = notification.image_data.as_ref() {
-        let (width, height) = (renderer.height - 40, renderer.height - 40);
-        renderer.draw_image(
-            x_offset,
-            (renderer.height as i32 / 2) - height as i32 / 2,
-            width,
-            height,
-            image_data,
+        let remaining_size = usize::min(
+            renderer.width - 2 * padding_x,
+            renderer.height - y_offset - 2 * padding_y,
         );
 
-        x_offset += width as i32 + x_offset;
+        let effective_size = remaining_size.min(64);
+        let (width, height) = (effective_size, effective_size);
+
+        let x_position = 0i32 - padding_x as i32 - width as i32;
+        let y_position = 0i32 - padding_y as i32 - height as i32;
+
+        renderer.draw_image(x_position, y_position, width, height, image_data);
+
+        x_consumed = x_consumed.max(width + 2 * padding_x);
     }
 
     let default_text_opts = render::text::TextRenderOptions::new();
@@ -80,33 +119,8 @@ fn render(
         }
     });
 
-    renderer.draw_text_spans(text_span, x_offset, 10, default_text_opts);
-
-    if let Some(app_icon) = &notification.app_icon {
-        let preferred_icon_size = icon::IconSize { size: 16, scale: 1 };
-        let icon_information = retrieve_app_icon(
-            app_icon.as_str(),
-            spec.icon_theme.as_deref(),
-            preferred_icon_size,
-        )
-        .unwrap();
-
-        let size = icon_information
-            .icon_size
-            .unwrap_or(preferred_icon_size)
-            .scaled_size();
-
-        match icon_information.file_type {
-            icon::IconFileType::PNG => {
-                if let Err(error) =
-                    renderer.draw_png(-10 - (size as i32), 10, size, size, &icon_information.path)
-                {
-                    eprintln!("Error drawing PNG icon: {}", error);
-                }
-            }
-            _ => {}
-        }
-    }
+    let remaining_width = renderer.width - x_consumed - padding_x;
+    renderer.draw_text_spans(text_span, padding_x as i32, padding_y as i32, remaining_width, default_text_opts);
 
     if let Some(border_color) = spec.border_color {
         renderer.draw_border(spec.border_size?, spec.border_radius, border_color);
