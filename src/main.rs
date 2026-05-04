@@ -35,18 +35,19 @@ fn render(
     notification: &Notification,
     spec: &OutputConfiguration,
 ) -> Option<()> {
-    let padding_x = 10usize;
-    let padding_y = 10usize;
-
-    let mut x_consumed = 0;
-    let mut y_offset = 0;
+    let mut padding_x = 10usize;
+    let mut padding_y = 10usize;
 
     if let Some(border_size) = spec.border_size
         && border_size != 0
     {
         renderer.draw_border(border_size, spec.border_radius, spec.border_color?);
+
+        padding_x += border_size;
+        padding_y += border_size;
     }
 
+    let mut icon_size = 0;
     if let Some(app_icon) = &notification.app_icon {
         let preferred_icon_size = icon::IconSize { size: 16, scale: 1 };
         let icon_information = retrieve_app_icon(
@@ -75,13 +76,14 @@ fn render(
             _ => {}
         }
 
-        y_offset += size;
+        icon_size = size;
     }
 
+    let mut image_size = 0;
     if let Some(image_data) = notification.image_data.as_ref() {
         let remaining_size = usize::min(
             renderer.width - 2 * padding_x,
-            renderer.height - y_offset - 2 * padding_y,
+            renderer.height - icon_size - 2 * padding_y,
         );
 
         let effective_size = remaining_size.min(64);
@@ -92,7 +94,7 @@ fn render(
 
         renderer.draw_image(x_position, y_position, width, height, image_data);
 
-        x_consumed = x_consumed.max(width + 2 * padding_x);
+        image_size = effective_size;
     }
 
     use cosmic_text::Family;
@@ -136,12 +138,14 @@ fn render(
         }
     });
 
-    let remaining_width = renderer.width - x_consumed - padding_x;
+    let remaining_width = renderer.width - 2 * padding_x - image_size.max(icon_size);
+    let remaining_height = renderer.height - 2 * padding_y;
     renderer.draw_text_spans(
         text_span,
         padding_x as i32,
         padding_y as i32,
         remaining_width,
+        remaining_height,
         default_text_opts,
     );
 

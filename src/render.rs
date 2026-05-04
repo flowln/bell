@@ -115,6 +115,7 @@ pub mod render {
             x: i32,
             y: i32,
             max_width: usize,
+            max_height: usize,
             default_options: Attrs<'a>,
         ) {
             self.text_renderer.draw_text_spans(
@@ -123,6 +124,7 @@ pub mod render {
                 x,
                 y,
                 max_width,
+                max_height,
                 default_options,
             );
         }
@@ -579,7 +581,7 @@ pub mod render {
 
 pub mod text {
     pub use crate::render::{Attrs, Color, Metrics};
-    use cosmic_text::{Buffer, FontSystem, Shaping, SwashCache};
+    use cosmic_text::{Align, Buffer, FontSystem, Shaping, SwashCache};
 
     pub struct TextRenderer {
         pub width: usize,
@@ -619,6 +621,7 @@ pub mod text {
             x: i32,
             y: i32,
             max_width: usize,
+            max_height: usize,
             default_options: Attrs<'a>,
         ) {
             let str_spans = {
@@ -640,16 +643,24 @@ pub mod text {
                 .borrow_with(&mut self.font_system);
 
             let (x, y) = with_scale!(self, x, y);
-            let (width, max_width, height) = with_scale!(self, self.width, max_width, self.height);
-            buffer.set_size(
-                Some(f32::from(usize::min(width - x, max_width) as u16)),
-                Some(f32::from((height - y) as u16)),
+            let (width, max_width, height, max_height) =
+                with_scale!(self, self.width, max_width, self.height, max_height);
+            let (buffer_width, buffer_height) = (
+                f32::from(usize::min(width - x, max_width) as u16),
+                f32::from(usize::min(height - y, max_height) as u16),
             );
+            buffer.set_size(Some(buffer_width), Some(buffer_height));
 
-            buffer.set_rich_text(str_spans, &default_options, Shaping::Advanced, None);
+            buffer.set_rich_text(str_spans, &default_options, Shaping::Advanced, Some(Align::Left));
 
             use cosmic_text::Wrap;
             buffer.set_wrap(Wrap::WordOrGlyph);
+
+            // FIXME: This option seems to only take into account the metrics of each text span individually,
+            // so if e.g. the body is split into two spans, it can have like two lines per span and still not
+            // be ellipsized.
+            use cosmic_text::{Ellipsize, EllipsizeHeightLimit};
+            buffer.set_ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(2)));
 
             let mut callback = |x_glyph, y_glyph, w, h, c| {
                 TextRenderer::draw_callback(
