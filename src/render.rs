@@ -133,8 +133,14 @@ pub mod render {
             max_width: usize,
             options: TextRenderOptions,
         ) {
-            self.text_renderer
-                .draw_text_spans(&mut self.backing_store, text_spans, x, y, max_width, options);
+            self.text_renderer.draw_text_spans(
+                &mut self.backing_store,
+                text_spans,
+                x,
+                y,
+                max_width,
+                options,
+            );
         }
 
         pub fn draw_image(
@@ -491,9 +497,14 @@ pub mod render {
                     // x = r * cos(th) | y = - r * sin(th) => tan(th) = - y / x => th = atan(- y / x)
                     let angle = (f32::atan2(-y as f32, x as f32) + PI_2).rem_euclid(PI_2);
 
-                    if angle < start_angle || angle > end_angle {
-                        continue;
+                    // 1e-3 is here to provide some leeway for floating-point rounding errors.
+                    if angle < start_angle - 1e-3 || angle > end_angle + 1e-3 {
+                        // Handle 'end_angle == 2pi' scenario, since it wraps back to 0.
+                        if end_angle < PI_2 || angle > (end_angle.rem_euclid(PI_2) + 1e-3) {
+                            continue;
+                        }
                     }
+
 
                     let (x_point, y_point) = self.wrap_position(x + center_x, y + center_y);
                     if radius as f32 - (distance_sq as f32).sqrt() <= border_size {
