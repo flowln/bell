@@ -13,6 +13,11 @@ pub mod dispatcher {
     use wayland_client::protocol::wl_shm::WlShm;
     use wayland_client::protocol::wl_surface::WlSurface;
 
+    use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::{
+        Shape, WpCursorShapeDeviceV1,
+    };
+    use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1::WpCursorShapeManagerV1;
+
     use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1;
     use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrLayerSurfaceV1;
 
@@ -39,6 +44,7 @@ pub mod dispatcher {
     pub struct WlOutputUserData;
     pub struct PointerUserData {
         current_surface: RwLock<Option<(u32, ObjectId)>>,
+        shape_device: RwLock<Option<WpCursorShapeDeviceV1>>,
     }
     pub struct WlSurfaceUserData;
     pub struct SeatUserData {
@@ -108,6 +114,9 @@ pub mod dispatcher {
                             Some(registry.bind(name, version, queue_handle, UserData {}));
                     } else if binds_on::<ZwlrLayerShellV1>(&interface) {
                         state.wlr_layer_shell =
+                            Some(registry.bind(name, version, queue_handle, UserData {}));
+                    } else if binds_on::<WpCursorShapeManagerV1>(&interface) {
+                        state.cursor_shape_manager =
                             Some(registry.bind(name, version, queue_handle, UserData {}));
                     }
 
@@ -229,6 +238,11 @@ pub mod dispatcher {
                 } => {
                     let mut current_state = data.current_surface.write().unwrap();
                     current_state.replace((serial, surface.id()));
+
+                    let shape_device_opt = data.shape_device.write().unwrap();
+                    if let Some(shape_device) = &*shape_device_opt{
+                        shape_device.set_shape(serial, Shape::Default);
+                    }
                 }
                 EventType::Leave { serial, surface } => {
                     let mut current_state = data.current_surface.write().unwrap();
@@ -288,7 +302,7 @@ pub mod dispatcher {
 
     impl Dispatch<WlSeat, SeatUserData> for WaylandState {
         fn event(
-            _state: &mut WaylandState,
+            state: &mut WaylandState,
             proxy: &WlSeat,
             event: <WlSeat as Proxy>::Event,
             data: &SeatUserData,
@@ -311,12 +325,26 @@ pub mod dispatcher {
 
                     let mut pointers = data.pointers.write().unwrap();
                     if capabilities.intersects(Capability::Pointer) {
-                        pointers.push(proxy.get_pointer(
+                        let pointer = proxy.get_pointer(
                             queue_handle,
                             PointerUserData {
                                 current_surface: RwLock::new(None),
+                                shape_device: RwLock::new(None),
                             },
-                        ));
+                        );
+
+                        if let Some(cursor_shape_manager) = &state.cursor_shape_manager {
+                            let shape_device = cursor_shape_manager.get_pointer(
+                                &pointer,
+                                queue_handle,
+                                UserData {},
+                            );
+
+                            let shape_device_lock = &pointer.data::<PointerUserData>().unwrap().shape_device;
+                            shape_device_lock.write().unwrap().replace(shape_device);
+                        }
+
+                        pointers.push(pointer);
                     } else {
                         while let Some(pointer) = pointers.pop() {
                             pointer.release();

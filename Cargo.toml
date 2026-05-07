@@ -12,5 +12,5 @@ png = "0.18.1"
 serde = { version = "1.0.228", features = ["derive"] }
 toml = "1.1.2"
 wayland-client = "0.31.14"
-wayland-protocols = { version = "0.32.12", features = ["client"] }
+wayland-protocols = { version = "0.32.12", features = ["client", "staging", "unstable"] }
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }

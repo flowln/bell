@@ -20,6 +20,8 @@ use wayland_client::protocol::wl_shm_pool::WlShmPool;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{EventQueue, Proxy, QueueHandle};
 
+use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1::WpCursorShapeManagerV1;
+
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrLayerSurfaceV1;
 
@@ -489,6 +491,8 @@ pub struct WaylandState {
     pub shared_memory: Option<WlShm>,
     pub seats: Vec<WlSeat>,
 
+    pub cursor_shape_manager: Option<WpCursorShapeManagerV1>,
+
     pub queue_handle: Option<QueueHandle<Self>>,
 
     trigger_events: OnceLock<HashMap<SurfaceID, Vec<EventTrigger>>>,
@@ -505,6 +509,7 @@ impl WaylandState {
             wlr_layer_shell: None,
             shared_memory: None,
             seats: Vec::new(),
+            cursor_shape_manager: None,
             queue_handle: None,
             trigger_events: OnceLock::new(),
             surfaces: OnceLock::new(),
