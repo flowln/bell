@@ -30,11 +30,13 @@ unsafe fn sigint_handler() {
 }
 
 static TEXT_PLACEHOLDER: &'static str = "<<placeholder>>";
-fn render(
+fn render_notification(
     renderer: &mut Renderer,
     notification: &Notification,
     spec: &OutputConfiguration,
 ) -> Option<()> {
+    renderer.clear(None);
+
     let mut padding_x = 10usize;
     let mut padding_y = 10usize;
 
@@ -231,9 +233,8 @@ fn process_surface(
             let renderer = renderers_for_surfaces.get_mut(surface_id).unwrap();
 
             renderer.set_buffer_scale(surface.get_buffer_scale());
-            renderer.clear(None);
 
-            render(renderer, notification, output_spec);
+            render_notification(renderer, notification, output_spec);
             surface.write(renderer.get_backing_store());
         }
 

@@ -382,39 +382,7 @@ pub mod render {
             if radius != 0 {
                 use std::f32::consts as Constant;
 
-                let transparent = Color::rgba(0, 0, 0, 0);
-                let (n_radius_x, n_radius_y) = self.wrap_position(-radius_i, -radius_i);
-                self.draw_rect_with_scale(0, 0, radius, radius, None, None, transparent, false);
-                self.draw_rect_with_scale(
-                    n_radius_x,
-                    0,
-                    radius,
-                    radius,
-                    None,
-                    None,
-                    transparent,
-                    false,
-                );
-                self.draw_rect_with_scale(
-                    0,
-                    n_radius_y,
-                    radius,
-                    radius,
-                    None,
-                    None,
-                    transparent,
-                    false,
-                );
-                self.draw_rect_with_scale(
-                    n_radius_x,
-                    n_radius_y,
-                    radius,
-                    radius,
-                    None,
-                    None,
-                    transparent,
-                    false,
-                );
+                let transparent = Some(Color::rgba(0, 0, 0, 0));
 
                 self.draw_arc(
                     radius_i,
@@ -425,6 +393,7 @@ pub mod render {
                     size as f32,
                     self.clear_color,
                     color,
+                    transparent,
                 );
                 self.draw_arc(
                     -radius_i,
@@ -435,6 +404,7 @@ pub mod render {
                     size as f32,
                     self.clear_color,
                     color,
+                    transparent,
                 );
                 self.draw_arc(
                     radius_i,
@@ -445,6 +415,7 @@ pub mod render {
                     size as f32,
                     self.clear_color,
                     color,
+                    transparent,
                 );
                 self.draw_arc(
                     -radius_i,
@@ -455,6 +426,7 @@ pub mod render {
                     size as f32,
                     self.clear_color,
                     color,
+                    transparent,
                 );
             }
         }
@@ -469,17 +441,13 @@ pub mod render {
             border_size: f32,
             fill_color: Color,
             border_color: Color,
+            outside_color: Option<Color>,
         ) {
             let radius = radius as i32;
             let radius_sq = radius.saturating_pow(2);
 
             for y in (-radius)..(radius + 1) {
                 for x in (-radius)..(radius + 1) {
-                    let distance_sq = x.saturating_pow(2) + y.saturating_pow(2);
-                    if distance_sq >= radius_sq {
-                        continue;
-                    }
-
                     // x = r * cos(th) | y = - r * sin(th) => tan(th) = - y / x => th = atan(- y / x)
                     let angle = (f32::atan2(-y as f32, x as f32) + PI_2).rem_euclid(PI_2);
 
@@ -492,6 +460,17 @@ pub mod render {
                     }
 
                     let (x_point, y_point) = self.wrap_position(x + center_x, y + center_y);
+
+                    let distance_sq = x.saturating_pow(2) + y.saturating_pow(2);
+                    if distance_sq >= radius_sq {
+                        if let Some(color) = outside_color {
+                            // Outside the arc
+                            self.draw_rect_with_scale(x_point, y_point, 1, 1, None, None, color, false);
+                        }
+
+                        continue;
+                    }
+
                     if radius as f32 - (distance_sq as f32).sqrt() <= border_size {
                         // Close to the border
                         self.draw_point_with_scale(x_point, y_point, None, None, border_color);
