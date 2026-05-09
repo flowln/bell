@@ -61,9 +61,16 @@ height = 120
 #   app_name: Name of the application that triggered the notification (if set).
 #   summary: Short text describing the notification.
 #   body: Full text body of the notification.
+#
+# In addition, basic markup is available on the layout and on the notification
+# data itself, like <b>...</b> for bold text.
+#
+# The available markup is documented by the notification spec (besides hyperlinks
+# and images, which are not yet supported):
+# https://specifications.freedesktop.org/notification/latest/markup.html
 message_layout = """
 <font_size=18.0 summary>
-from <app_name>
+from <i><app_name></i>
 
 <color=0x80FFFFFF ghost text>
 

@@ -13,11 +13,12 @@ mod render;
 mod signal;
 mod wayland;
 
+use crate::configuration::TextOptions;
 use crate::dbus as _dbus;
 use configuration::Configuration;
 use icon::retrieve_app_icon;
 use render::render::Renderer;
-use render::{Attrs, Metrics};
+use render::{Attrs, Color, Metrics};
 
 use configuration::{GrowthDirection, OutputConfiguration};
 use notification::{
@@ -29,7 +30,6 @@ unsafe fn sigint_handler() {
     EXIT_REQUESTED.store(true, Ordering::Relaxed);
 }
 
-static TEXT_PLACEHOLDER: &'static str = "<<placeholder>>";
 fn render_notification(
     renderer: &mut Renderer,
     notification: &Notification,
@@ -114,29 +114,52 @@ fn render_notification(
         default_text_opts = default_text_opts.family(family);
     }
 
-    let mut text_span_fragment_holder = Vec::<String>::new();
-    let mut text_span = Vec::<(&str, Attrs)>::new();
+    let mut text_span = Vec::<(String, Attrs)>::new();
 
-    spec.get_message_layout(|text_fragment, font_size, text_color| {
+    let text_opts_to_attrs = |text_options: &TextOptions, default_opts: Option<&TextOptions>| {
+        let default_opt_default = TextOptions::default();
+        let default_opt_values = default_opts.unwrap_or(&default_opt_default);
+
+        let font_size = text_options.font_size;
         // NOTE: Arbitrary values to make a reasonable line height.
         let metrics = Metrics::new(font_size, font_size + 6.0f32.min(font_size * 0.3));
-        let attrs = default_text_opts.clone().metrics(metrics).color(text_color);
+        let mut attrs = default_text_opts
+            .clone()
+            .metrics(metrics)
+            .color(Color(text_options.text_color));
 
-        match text_fragment {
-            "app_name" => text_span.push((notification.app_name.as_str(), attrs)),
-            "summary" => text_span.push((notification.summary.as_str(), attrs)),
-            "body" => text_span.push((notification.body.as_str(), attrs)),
-            fragment => {
-                text_span_fragment_holder.push(String::from(fragment));
-                text_span.push((TEXT_PLACEHOLDER, attrs));
-            }
+        use cosmic_text::{Style, UnderlineStyle, Weight};
+        if text_options.bold || default_opt_values.bold {
+            attrs = attrs.weight(Weight::BOLD);
         }
-    });
+        if text_options.italic || default_opt_values.italic {
+            attrs = attrs.style(Style::Italic);
+        }
+        if text_options.underline || default_opt_values.underline {
+            attrs = attrs.underline(UnderlineStyle::Single)
+        }
 
-    let mut holder_it = text_span_fragment_holder.iter();
-    text_span.iter_mut().for_each(|(text, _)| {
-        if *text == TEXT_PLACEHOLDER {
-            *text = holder_it.next().unwrap().as_str();
+        attrs
+    };
+
+    spec.get_message_layout(|text_fragment, text_options| {
+        let attrs = text_opts_to_attrs(&text_options, None);
+
+        let mut parse_recurse = |text: &str| {
+            let spans = spec.parse_layout(text);
+            let parsed_spans = spans
+                .into_iter()
+                .map(|(text, opts)| (text, text_opts_to_attrs(&opts, Some(&text_options))));
+            text_span.extend(parsed_spans);
+        };
+
+        match text_fragment.as_str() {
+            "app_name" => parse_recurse(&notification.app_name),
+            "summary" => parse_recurse(&notification.summary),
+            "body" => parse_recurse(&notification.body),
+            _ => {
+                text_span.push((text_fragment, attrs));
+            }
         }
     });
 

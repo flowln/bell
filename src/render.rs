@@ -1,4 +1,4 @@
-pub use cosmic_text::{Attrs, Color, Metrics};
+pub use cosmic_text::{Attrs, Color, Metrics, Style, UnderlineStyle, Weight};
 
 #[macro_export]
 macro_rules! with_scale {
@@ -111,7 +111,7 @@ pub mod render {
         /// top-left corner from which text rendering will start.
         pub fn draw_text_spans<'a>(
             &mut self,
-            text_spans: Vec<(&str, Attrs<'a>)>,
+            text_spans: Vec<(String, Attrs<'a>)>,
             x: i32,
             y: i32,
             max_width: usize,
@@ -465,7 +465,9 @@ pub mod render {
                     if distance_sq >= radius_sq {
                         if let Some(color) = outside_color {
                             // Outside the arc
-                            self.draw_rect_with_scale(x_point, y_point, 1, 1, None, None, color, false);
+                            self.draw_rect_with_scale(
+                                x_point, y_point, 1, 1, None, None, color, false,
+                            );
                         }
 
                         continue;
@@ -596,24 +598,23 @@ pub mod text {
         pub fn draw_text_spans<'a>(
             &mut self,
             backend: &mut [u32],
-            mut text_spans: Vec<(&str, Attrs<'a>)>,
+            text_spans: Vec<(String, Attrs<'a>)>,
             x: i32,
             y: i32,
             max_width: usize,
             max_height: usize,
             default_options: Attrs<'a>,
         ) {
-            let str_spans = {
-                let attr_change = |attrs: &mut Attrs<'_>| {
-                    attrs.metrics_opt = attrs
-                        .metrics_opt
-                        .map(|cache_metrics| self.scale_metrics(cache_metrics.into()).into())
-                };
-                text_spans
-                    .iter_mut()
-                    .for_each(|(_, attrs)| attr_change(attrs));
-                text_spans.into_iter()
+            let scale_attrs = |attrs: &Attrs<'a>| {
+                attrs
+                    .clone()
+                    .metrics(self.scale_metrics(attrs.metrics_opt.unwrap().into()))
             };
+
+            let mut str_spans = Vec::new();
+            text_spans
+                .iter()
+                .for_each(|(text, attrs)| str_spans.push((text.as_str(), scale_attrs(attrs))));
 
             let mut buffer = self
                 .buffer
@@ -630,7 +631,12 @@ pub mod text {
             );
             buffer.set_size(Some(buffer_width), Some(buffer_height));
 
-            buffer.set_rich_text(str_spans, &default_options, Shaping::Advanced, Some(Align::Left));
+            buffer.set_rich_text(
+                str_spans,
+                &default_options,
+                Shaping::Advanced,
+                Some(Align::Left),
+            );
 
             use cosmic_text::Wrap;
             buffer.set_wrap(Wrap::WordOrGlyph);

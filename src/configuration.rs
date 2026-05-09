@@ -157,6 +157,16 @@ pub struct OutputConfiguration {
     pub margins: Option<Margin>,
 }
 
+#[derive(Copy, Clone, Default)]
+pub struct TextOptions {
+    pub font_size: f32,
+    pub text_color: u32,
+
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+}
+
 #[macro_export]
 macro_rules! with_other {
     ( $self:expr,$other:expr,$($field:ident) + ) => {{ $( $self.$field = $self.$field.or($other.$field); )+ }};
@@ -177,74 +187,106 @@ impl OutputConfiguration {
         with_other!(self, other, anchor direction layer margins);
     }
 
-    pub fn get_message_layout(&self, mut render_fragment: impl FnMut(&str, f32, Color) -> ()) {
+    pub fn get_message_layout<T>(
+        &self,
+        mut render_fragment: impl FnMut(String, TextOptions) -> T,
+    ) -> Vec<T> {
+        let mut spans = Vec::<T>::new();
+
         let layout = self.message_layout.as_ref().unwrap();
+        for (fragment, options) in self.parse_layout(layout) {
+            spans.push(render_fragment(fragment, options));
+        }
+
+        spans
+    }
+
+    pub fn parse_layout(&self, layout: &str) -> Vec<(String, TextOptions)> {
+        let mut parsed_fragments = Vec::new();
+
+        let mut current_text_options = TextOptions::default();
         for chunk in layout.split(['<', '>']) {
             if chunk.len() == 0 {
                 continue;
             }
 
             match chunk {
+                "b" => current_text_options.bold = true,
+                "/b" => current_text_options.bold = false,
+                "i" => current_text_options.italic = true,
+                "/i" => current_text_options.italic = false,
+                "u" => current_text_options.underline = true,
+                "/u" => current_text_options.underline = false,
                 fragment => {
-                    let mut font_size: Option<f32> = None;
-                    let mut text_color: Option<Color> = None;
+                    let (parsed_fragment, font_size, text_color) =
+                        self.parse_layout_fragment(fragment);
 
-                    let fragment_split = fragment.split(['=', ' ']).collect::<Vec<&str>>();
-                    let mut fragment_index = 0;
+                    current_text_options.font_size = font_size;
+                    current_text_options.text_color = text_color;
 
-                    loop {
-                        match fragment_split.as_slice()[fragment_index..] {
-                            ["font_size", value, ..] => {
-                                fragment_index += 2;
-
-                                match value.parse::<f32>() {
-                                    Ok(parsed_value) => font_size = Some(parsed_value),
-                                    Err(error) => eprintln!(
-                                        "Failed to parse 'font_size' parameter in 'message_layout': {}",
-                                        error.to_string()
-                                    ),
-                                }
-                            }
-                            ["color", value, ..] => {
-                                fragment_index += 2;
-
-                                let u32_value = u32::from_str_radix(
-                                    value.strip_prefix("0x").unwrap_or(value),
-                                    16,
-                                );
-                                if let Err(error) = u32_value {
-                                    eprintln!(
-                                        "Failed to parse 'color' parameter in 'message_layout': {}",
-                                        error.to_string()
-                                    );
-                                    continue;
-                                }
-                                let u32_value = u32_value.unwrap();
-
-                                use serde::de::value::{Error, U32Deserializer};
-                                match deserialize_color::<U32Deserializer<Error>>(
-                                    u32_value.into_deserializer(),
-                                ) {
-                                    Ok(parsed_color) => text_color = parsed_color,
-                                    Err(error) => eprintln!(
-                                        "Failed to parse 'color' parameter in 'message_layout': {}",
-                                        error.to_string()
-                                    ),
-                                }
-                            }
-                            _ => break,
-                        }
-                    }
-
-                    let fragment = fragment_split[fragment_index..].join(" ");
-                    render_fragment(
-                        fragment.as_str(),
-                        font_size.unwrap_or(self.font_size.unwrap()),
-                        text_color.unwrap_or(self.text_color.unwrap()),
-                    );
+                    parsed_fragments.push((parsed_fragment, current_text_options.clone()));
                 }
             }
         }
+
+        parsed_fragments
+    }
+
+    fn parse_layout_fragment(&self, layout_fragment: &str) -> (String, f32, u32) {
+        let fragment_split = layout_fragment.split(['=', ' ']).collect::<Vec<&str>>();
+        let mut fragment_index = 0;
+
+        let mut font_size = None;
+        let mut text_color = None;
+
+        loop {
+            match fragment_split.as_slice()[fragment_index..] {
+                ["font_size", value, ..] => {
+                    fragment_index += 2;
+
+                    match value.parse::<f32>() {
+                        Ok(parsed_value) => font_size = Some(parsed_value),
+                        Err(error) => eprintln!(
+                            "Failed to parse 'font_size' parameter in 'message_layout': {}",
+                            error.to_string()
+                        ),
+                    }
+                }
+                ["color", value, ..] => {
+                    fragment_index += 2;
+
+                    let u32_value =
+                        u32::from_str_radix(value.strip_prefix("0x").unwrap_or(value), 16);
+                    if let Err(error) = u32_value {
+                        eprintln!(
+                            "Failed to parse 'color' parameter in 'message_layout': {}",
+                            error.to_string()
+                        );
+                        continue;
+                    }
+                    let u32_value = u32_value.unwrap();
+
+                    use serde::de::value::{Error, U32Deserializer};
+                    match deserialize_color::<U32Deserializer<Error>>(u32_value.into_deserializer())
+                    {
+                        Ok(parsed_color) => text_color = parsed_color,
+                        Err(error) => eprintln!(
+                            "Failed to parse 'color' parameter in 'message_layout': {}",
+                            error.to_string()
+                        ),
+                    }
+                }
+                _ => break,
+            }
+        }
+
+        let fragment = fragment_split[fragment_index..].join(" ");
+
+        (
+            fragment,
+            font_size.unwrap_or(self.font_size.unwrap()),
+            text_color.unwrap_or(self.text_color.unwrap()).0,
+        )
     }
 }
 
@@ -691,17 +733,17 @@ fn test_message_layout_simple() {
     let mut body_called = false;
     let mut fragment_called = false;
 
-    let render = |text: &str, font_size: f32, text_color: Color| {
+    let render = |text: String, text_options: TextOptions| {
         assert_eq!(
-            font_size,
+            text_options.font_size,
             configuration.default_output_config.font_size.unwrap()
         );
         assert_eq!(
-            text_color,
-            configuration.default_output_config.text_color.unwrap()
+            text_options.text_color,
+            configuration.default_output_config.text_color.unwrap().0
         );
 
-        match text {
+        match text.as_str() {
             "app_name" => app_name_called = true,
             "summary" => summary_called = true,
             "body" => body_called = true,
@@ -739,15 +781,18 @@ fn test_message_layout_customized() {
     let mut summary_called = false;
     let mut fragment_called = false;
 
-    let render = |text: &str, font_size: f32, text_color: Color| match text {
+    let render = |text: String, text_options: TextOptions| match text.as_str() {
         "summary" => {
             summary_called = true;
-            assert_eq!(font_size, 18.0);
+            assert_eq!(text_options.font_size, 18.0);
         }
         "this is a custom text" => {
             fragment_called = true;
-            assert_eq!(font_size, 13.5);
-            assert_eq!(text_color, Color::rgba(0xAD, 0xBE, 0xEF, 0xDE));
+            assert_eq!(text_options.font_size, 13.5);
+            assert_eq!(
+                text_options.text_color,
+                Color::rgba(0xAD, 0xBE, 0xEF, 0xDE).0
+            );
         }
         "\n" => {}
         _ => {

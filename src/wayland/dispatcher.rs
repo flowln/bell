@@ -240,7 +240,7 @@ pub mod dispatcher {
                     current_state.replace((serial, surface.id()));
 
                     let shape_device_opt = data.shape_device.write().unwrap();
-                    if let Some(shape_device) = &*shape_device_opt{
+                    if let Some(shape_device) = &*shape_device_opt {
                         shape_device.set_shape(serial, Shape::Default);
                     }
                 }
@@ -340,7 +340,8 @@ pub mod dispatcher {
                                 UserData {},
                             );
 
-                            let shape_device_lock = &pointer.data::<PointerUserData>().unwrap().shape_device;
+                            let shape_device_lock =
+                                &pointer.data::<PointerUserData>().unwrap().shape_device;
                             shape_device_lock.write().unwrap().replace(shape_device);
                         }
 
