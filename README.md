@@ -88,8 +88,11 @@ icon_theme = "Adwaita"
 # The available actions are:
 #   nothing: Do nothing. The default when no action is configured for a trigger.
 #   close-notification: Close all surfaces of the current notification.
+#   exec: Execute a custom command. The syntax for that is:
+#     trigger = { exec = "<command with arguments>" }
 [events]
 right-click = "close-notification"
+middle-click = { exec = "mpv /usr/share/sounds/freedesktop/stereo/message.oga" }
 
 # Specify per-input options.
 [outputs."eDP-1"]

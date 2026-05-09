@@ -327,10 +327,12 @@ pub enum EventTrigger {
     OnMiddleClick,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub enum EventResponse {
     #[serde(rename = "close-notification")]
     CloseNotification,
+    #[serde(rename = "exec")]
+    ExecuteCommand(String),
     #[serde(rename = "nothing")]
     Nothing,
 }
@@ -479,9 +481,10 @@ impl Configuration {
     pub fn get_event_handler(&self) -> impl Fn(&EventTrigger) -> EventResponse + use<> {
         let event_translator = self.events.clone();
         move |trigger: &EventTrigger| {
-            *event_translator
+            event_translator
                 .get(trigger)
                 .unwrap_or(&EventResponse::Nothing)
+                .clone()
         }
     }
 
@@ -710,6 +713,37 @@ fn test_event_handler() {
     assert_eq!(
         event_handler(&EventTrigger::OnRightClick),
         EventResponse::CloseNotification
+    );
+    assert_eq!(
+        event_handler(&EventTrigger::OnMiddleClick),
+        EventResponse::Nothing
+    );
+}
+
+#[test]
+fn test_event_handler_custom_command() {
+    let file_contents = r#"
+        [events]
+        left-click = { exec = "echo abc" }
+    "#
+    .to_owned();
+
+    let configuration = Configuration::from_string(&file_contents);
+
+    if let Err(error) = configuration {
+        panic!("{}", error.to_string());
+    }
+
+    let configuration = configuration.unwrap();
+    let event_handler = configuration.get_event_handler();
+
+    assert_eq!(
+        event_handler(&EventTrigger::OnLeftClick),
+        EventResponse::ExecuteCommand("echo abc".to_owned())
+    );
+    assert_eq!(
+        event_handler(&EventTrigger::OnRightClick),
+        EventResponse::Nothing
     );
     assert_eq!(
         event_handler(&EventTrigger::OnMiddleClick),

@@ -90,6 +90,19 @@ impl Notification {
             EventResponse::CloseNotification => {
                 self.expire();
             }
+            EventResponse::ExecuteCommand(command_string) => {
+                use std::process::Command;
+
+                let (command, args_string) = command_string.split_once(' ').unwrap();
+                let args = args_string.split_whitespace();
+
+                if let Err(error) = Command::new(command).args(args).status() {
+                    eprintln!(
+                        "Failed to execute command '{}' with args '{}': {}",
+                        command, args_string, error
+                    );
+                }
+            }
             _ => {
                 return false;
             }
