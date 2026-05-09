@@ -93,6 +93,9 @@ right-click = "close-notification"
 
 # Specify per-input options.
 [outputs."eDP-1"]
+# Enable notifications to show up in this output.
+enabled = true
+
 # Default font family to use.
 # Will fallback to the default system font if it could not be found
 #

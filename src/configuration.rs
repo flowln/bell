@@ -113,6 +113,9 @@ where
 #[derive(Debug, Deserialize)]
 pub struct OutputConfiguration {
     #[serde(default)]
+    pub enabled: Option<bool>,
+
+    #[serde(default)]
     pub width: Option<i32>,
     #[serde(default)]
     pub height: Option<i32>,
@@ -177,6 +180,7 @@ macro_rules! with_other_owned {
 }
 impl OutputConfiguration {
     pub fn complete_missing(&mut self, other: &OutputConfiguration) {
+        with_other!(self, other, enabled);
         with_other!(self, other, width height);
         with_other_owned!(self, other, message_layout);
         with_other_owned!(self, other, font_family);
@@ -293,6 +297,7 @@ impl OutputConfiguration {
 impl Default for OutputConfiguration {
     fn default() -> Self {
         OutputConfiguration {
+            enabled: None,
             width: Some(260),
             height: Some(125),
             message_layout: Some("<summary> from <app_name>\n<body>".to_owned()),

@@ -46,7 +46,9 @@ impl Notification {
 
             for output_name in available_output_names {
                 let output_configuration = configuration.get_output_configuration(output_name);
-                self.try_add_output(output_name, output_configuration);
+                if output_configuration.enabled.unwrap_or(false) {
+                    self.try_add_output(output_name, output_configuration);
+                }
             }
         }
 
