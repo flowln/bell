@@ -1,4 +1,4 @@
-use crate::configuration::{Configuration, EventResponse, OutputConfiguration};
+use crate::configuration::{Configuration, EventResponse, EventTrigger, OutputConfiguration};
 use crate::dbus::ImageData;
 use crate::wayland::{SurfaceBackend, SurfaceID, wayland_state_read, wayland_state_write};
 
@@ -118,6 +118,10 @@ impl Notification {
         wayland_state.mark_surface_for_destruction(surface_id);
     }
 
+    pub fn has_surface(&self, id: &SurfaceID) -> bool {
+        self.surface_ids.contains(id)
+    }
+
     pub fn has_any_surface(&self) -> bool {
         !self.surface_ids.is_empty()
     }
@@ -128,15 +132,6 @@ impl Notification {
     {
         for id in self.surface_ids.iter() {
             closure(id);
-        }
-    }
-
-    pub fn for_each_surface_mut<F>(&mut self, mut closure: F)
-    where
-        F: FnMut(&mut Self, &SurfaceID) -> (),
-    {
-        for id in self.surface_ids.clone().iter() {
-            closure(self, id);
         }
     }
 
@@ -214,6 +209,9 @@ pub struct NotificationManager {
     active_configuration: Option<Configuration>,
     active_notifications: LazyLock<BTreeMap<u32, Notification>>,
 
+    event_triggers_to_process: LazyLock<HashMap<u32, Vec<EventTrigger>>>,
+    event_handler: LazyLock<HashMap<EventTrigger, EventResponse>>,
+
     inactive_uncommited_notification_ids: Vec<(u32, NotificationCloseReason)>,
 }
 
@@ -223,6 +221,8 @@ impl NotificationManager {
             biggest_id_given: 0,
             active_configuration: None,
             active_notifications: LazyLock::new(|| BTreeMap::new()),
+            event_triggers_to_process: LazyLock::new(|| HashMap::new()),
+            event_handler: LazyLock::new(|| HashMap::new()),
             inactive_uncommited_notification_ids: Vec::new(),
         }
     }
@@ -235,13 +235,19 @@ impl NotificationManager {
         self.active_configuration.as_ref()
     }
 
-    pub fn add_notification(&mut self, notification: Notification) -> u32 {
+    pub fn add_notification(&mut self, mut notification: Notification) -> u32 {
         self.biggest_id_given = self.biggest_id_given.wrapping_add(1);
         if self.biggest_id_given == 0 {
             // From the dbus notification documentation:
             //   Servers must make sure not to return zero as an ID.
             self.biggest_id_given += 1;
         }
+
+        notification.try_handle_event(
+            self.event_handler
+                .get(&EventTrigger::OnNotificationReceived)
+                .unwrap_or(&EventResponse::default()),
+        );
 
         self.active_notifications
             .insert(self.biggest_id_given, notification);
@@ -254,6 +260,9 @@ impl NotificationManager {
         if self.biggest_id_given == 0 {
             self.biggest_id_given += 1;
         }
+
+        // Expire old notification if it exists.
+        let _ = self.expire_notification(&id);
 
         self.active_notifications.insert(id, notification);
     }
@@ -279,9 +288,34 @@ impl NotificationManager {
         !self.active_notifications.is_empty()
     }
 
+    pub fn set_event_handler(&mut self, event_handler: HashMap<EventTrigger, EventResponse>) {
+        *self.event_handler = event_handler;
+    }
+
+    pub fn add_event_triggers(&mut self, triggers: &mut HashMap<SurfaceID, Vec<EventTrigger>>) {
+        for (surface_id, event_triggers) in triggers.drain() {
+            for (notification_id, notification) in self.active_notifications.iter() {
+                if !notification.has_surface(&surface_id) {
+                    continue;
+                }
+
+                if self.event_triggers_to_process.contains_key(notification_id) {
+                    self.event_triggers_to_process
+                        .get_mut(notification_id)
+                        .unwrap()
+                        .extend(event_triggers);
+                } else {
+                    self.event_triggers_to_process
+                        .insert(notification_id.clone(), event_triggers);
+                }
+
+                break;
+            }
+        }
+    }
+
     pub fn process_active_notifications<F>(
         &mut self,
-        event_queue: &HashMap<SurfaceID, Vec<EventResponse>>,
         process_surface: &mut F,
     ) -> Vec<(u32, NotificationCloseReason)>
     where
@@ -291,14 +325,6 @@ impl NotificationManager {
 
         for (id, notification) in self.active_notifications.iter_mut() {
             let mut surfaces_to_delete = Vec::<SurfaceID>::new();
-
-            notification.for_each_surface_mut(|notif, surface_id| {
-                if let Some(trigger_list) = event_queue.get(surface_id) {
-                    for trigger in trigger_list {
-                        notif.try_handle_event(trigger);
-                    }
-                }
-            });
 
             notification.for_each_surface(|surface_id| {
                 match process_surface(surface_id, notification, &mut offset_per_output) {
@@ -339,6 +365,18 @@ impl NotificationManager {
             }
         }
 
+        for (id, event_triggers) in self.event_triggers_to_process.drain() {
+            if let Some(notification) = self.active_notifications.get_mut(&id) {
+                for trigger in event_triggers {
+                    notification.try_handle_event(
+                        self.event_handler
+                            .get(&trigger)
+                            .unwrap_or(&EventResponse::default()),
+                    );
+                }
+            }
+        }
+
         let ret_value = self.inactive_uncommited_notification_ids.clone();
         self.inactive_uncommited_notification_ids.clear();
 
@@ -356,6 +394,13 @@ impl NotificationManager {
             .active_notifications
             .remove(id)
             .ok_or(NotificationError::InvalidID(*id))?;
+
+        notification.try_handle_event(
+            self.event_handler
+                .get(&EventTrigger::OnNotificationClosed)
+                .unwrap_or(&EventResponse::default()),
+        );
+
         notification.expire();
 
         Ok(())

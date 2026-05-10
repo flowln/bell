@@ -341,6 +341,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     {
         let mut notification_manager = notification_manager_write();
+        notification_manager.set_event_handler(event_handler);
         notification_manager.set_configuration(configuration);
     }
 
@@ -384,18 +385,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     signal::install_signal_handler(signal::PosixSignal::SIGINT, sigint_handler);
 
     while !EXIT_REQUESTED.load(Ordering::Relaxed) {
-        let event_queue = {
+        {
             let mut wayland_state = wayland::wayland_state_write();
             let trigger_queue = wayland_state.consume_trigger_events();
 
-            trigger_queue
-                .map(|(id, trigger_list)| (id, trigger_list.iter().map(&event_handler).collect()))
-                .collect()
-        };
+            let mut notification_manager = notification_manager_write();
+            notification_manager.add_event_triggers(trigger_queue);
+        }
 
         let closed_notifications = {
             let mut notification_manager = notification_manager_write();
-            notification_manager.process_active_notifications(&event_queue, &mut manager_callback)
+            notification_manager.process_active_notifications(&mut manager_callback)
         };
 
         {

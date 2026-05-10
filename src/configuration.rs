@@ -325,6 +325,10 @@ pub enum EventTrigger {
     OnRightClick,
     #[serde(rename = "middle-click")]
     OnMiddleClick,
+    #[serde(rename = "on-notification-received")]
+    OnNotificationReceived,
+    #[serde(rename = "on-notification-closed")]
+    OnNotificationClosed,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -335,6 +339,12 @@ pub enum EventResponse {
     ExecuteCommand(String),
     #[serde(rename = "nothing")]
     Nothing,
+}
+
+impl Default for EventResponse {
+    fn default() -> Self {
+        EventResponse::Nothing
+    }
 }
 
 struct OutputsVisitor;
@@ -478,14 +488,8 @@ impl Configuration {
         }
     }
 
-    pub fn get_event_handler(&self) -> impl Fn(&EventTrigger) -> EventResponse + use<> {
-        let event_translator = self.events.clone();
-        move |trigger: &EventTrigger| {
-            event_translator
-                .get(trigger)
-                .unwrap_or(&EventResponse::Nothing)
-                .clone()
-        }
+    pub fn get_event_handler(&self) -> HashMap<EventTrigger, EventResponse> {
+        self.events.clone()
     }
 
     fn populate_outputs_with_default(&mut self) {
@@ -704,7 +708,13 @@ fn test_event_handler() {
     }
 
     let configuration = configuration.unwrap();
-    let event_handler = configuration.get_event_handler();
+    let event_handler = |trigger| {
+        configuration
+            .get_event_handler()
+            .get(trigger)
+            .unwrap_or(&EventResponse::Nothing)
+            .clone()
+    };
 
     assert_eq!(
         event_handler(&EventTrigger::OnLeftClick),
@@ -716,6 +726,14 @@ fn test_event_handler() {
     );
     assert_eq!(
         event_handler(&EventTrigger::OnMiddleClick),
+        EventResponse::Nothing
+    );
+    assert_eq!(
+        event_handler(&EventTrigger::OnNotificationReceived),
+        EventResponse::Nothing
+    );
+    assert_eq!(
+        event_handler(&EventTrigger::OnNotificationClosed),
         EventResponse::Nothing
     );
 }
@@ -735,7 +753,13 @@ fn test_event_handler_custom_command() {
     }
 
     let configuration = configuration.unwrap();
-    let event_handler = configuration.get_event_handler();
+    let event_handler = |trigger| {
+        configuration
+            .get_event_handler()
+            .get(trigger)
+            .unwrap_or(&EventResponse::Nothing)
+            .clone()
+    };
 
     assert_eq!(
         event_handler(&EventTrigger::OnLeftClick),
@@ -747,6 +771,14 @@ fn test_event_handler_custom_command() {
     );
     assert_eq!(
         event_handler(&EventTrigger::OnMiddleClick),
+        EventResponse::Nothing
+    );
+    assert_eq!(
+        event_handler(&EventTrigger::OnNotificationReceived),
+        EventResponse::Nothing
+    );
+    assert_eq!(
+        event_handler(&EventTrigger::OnNotificationClosed),
         EventResponse::Nothing
     );
 }

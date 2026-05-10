@@ -83,7 +83,7 @@ icon_theme = "Adwaita"
 # Special section for describing actions to perform upon interacting with the notification.
 #
 # The available triggers are:
-#   left-click, right-click, middle-click
+#   left-click, right-click, middle-click, on-notification-received, on-notification-closed
 #
 # The available actions are:
 #   nothing: Do nothing. The default when no action is configured for a trigger.
@@ -92,7 +92,7 @@ icon_theme = "Adwaita"
 #     trigger = { exec = "<command with arguments>" }
 [events]
 right-click = "close-notification"
-middle-click = { exec = "mpv /usr/share/sounds/freedesktop/stereo/message.oga" }
+on-notification-received = { exec = "mpv /usr/share/sounds/freedesktop/stereo/message.oga" }
 
 # Specify per-input options.
 [outputs."eDP-1"]

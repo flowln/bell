@@ -539,10 +539,8 @@ impl WaylandState {
         self.outputs.get_mut().unwrap().insert(output_name, output);
     }
 
-    pub fn consume_trigger_events(
-        &mut self,
-    ) -> impl Iterator<Item = (SurfaceID, Vec<EventTrigger>)> {
-        self.trigger_events.get_mut().unwrap().drain()
+    pub fn consume_trigger_events(&mut self) -> &mut HashMap<SurfaceID, Vec<EventTrigger>> {
+        self.trigger_events.get_mut().unwrap()
     }
 
     pub fn create_surface(
