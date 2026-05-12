@@ -651,8 +651,8 @@ pub mod text {
                 TextRenderer::draw_callback(
                     backend,
                     with_scale!(self, self.width),
-                    (x + x_glyph as usize) as u32,
-                    (y + y_glyph as usize) as u32,
+                    x.wrapping_add(x_glyph as usize) as u32,
+                    y.wrapping_add(y_glyph as usize) as u32,
                     w,
                     h,
                     c,
