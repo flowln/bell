@@ -122,7 +122,9 @@ pub mod dispatcher {
 
                     debug_println!("Name: {name}, Interface: {interface}");
                 }
-                wl_registry::Event::GlobalRemove { name: _ } => {}
+                wl_registry::Event::GlobalRemove { name } => {
+                    debug_println!("[Removed] Name: {name}");
+                }
                 _ => {
                     unreachable!()
                 }

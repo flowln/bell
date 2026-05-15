@@ -378,14 +378,7 @@ impl Surface {
         let addr = memory_pool.mmap_addr.unwrap() as *mut u8;
 
         unsafe {
-            for (idx, data_point) in data.iter().enumerate() {
-                let data_point_le = data_point.to_le_bytes();
-
-                *addr.offset((4 * idx + 0) as isize) = data_point_le[0];
-                *addr.offset((4 * idx + 1) as isize) = data_point_le[1];
-                *addr.offset((4 * idx + 2) as isize) = data_point_le[2];
-                *addr.offset((4 * idx + 3) as isize) = data_point_le[3];
-            }
+            addr.copy_from_nonoverlapping(data.as_ptr().cast(), data.len() * 4);
         }
 
         self.request_draw();
@@ -402,7 +395,7 @@ impl Surface {
     pub fn set_configured(&mut self) {
         self.is_configured = true;
 
-        if self.ready_to_draw {
+        if self.draw_is_requested && self.ready_to_draw {
             self.draw();
         }
     }
@@ -621,31 +614,34 @@ impl WaylandState {
     }
 }
 
-pub struct SocketManager<'a> {
+pub struct SocketManager {
     epoll_fd: RawFd,
 
-    event_queue: &'a mut EventQueue<WaylandState>,
+    pub event_queue: EventQueue<WaylandState>,
 }
 
-impl<'a> SocketManager<'a> {
-    pub fn new(event_queue: &'a mut EventQueue<WaylandState>) -> SocketManager<'a> {
+impl SocketManager {
+    pub fn new(event_queue: EventQueue<WaylandState>) -> SocketManager {
         let epoll_fd = epoll::create();
 
-        SocketManager {
+        let manager = SocketManager {
             epoll_fd,
             event_queue,
-        }
+        };
+
+        manager
     }
 
-    pub fn handle(&mut self, timeout: i32) {
-        self.event_queue.flush().unwrap();
-        self.dispatch();
-
+    pub fn wait_on_socket_ready(&mut self, timeout: std::time::Duration) -> bool {
         let read_guard = self.event_queue.prepare_read().unwrap();
         let fd = read_guard.connection_fd().as_raw_fd();
 
-        let received =
-            epoll::wait_on_fds(self.epoll_fd, [fd].to_vec(), Some(epoll::EPOLLIN), timeout);
+        let received = epoll::wait_on_fds(
+            self.epoll_fd,
+            [fd].to_vec(),
+            Some(epoll::EPOLLIN),
+            timeout.as_millis() as i32,
+        );
 
         let mut socket_ready = false;
         if let Ok(mapping) = received {
@@ -653,24 +649,29 @@ impl<'a> SocketManager<'a> {
         }
 
         if socket_ready {
-            if let Ok(_) = read_guard.read() {
-                self.dispatch();
+            if let Ok(read_count) = read_guard.read() {
+                read_count != 0
+            } else {
+                false
             }
         } else {
-            std::mem::drop(read_guard);
+            false
         }
     }
 
-    fn dispatch(&mut self) {
-        let mut wayland_state = wayland_state_write();
-        self.event_queue
-            .dispatch_pending(&mut wayland_state)
-            .unwrap();
+    pub fn flush(&mut self) {
+        self.event_queue.flush().unwrap();
+    }
+
+    pub fn dispatch_events_in_queue(&mut self, wayland_state: &mut WaylandState) -> usize {
+        self.event_queue.dispatch_pending(wayland_state).unwrap()
     }
 }
 
-impl Drop for SocketManager<'_> {
+impl Drop for SocketManager {
     fn drop(&mut self) {
+        self.flush();
+
         epoll::close(self.epoll_fd);
     }
 }

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::thread;
 
 use wayland_client::Connection;
 use wayland_client::backend::ObjectId;
@@ -209,7 +211,7 @@ fn process_surface(
     notification: &Notification,
     surface_id: &ObjectId,
 ) -> SurfaceProcessingOutput {
-    let mut wayland_state = wayland::wayland_state_write();
+    let mut wayland_state = wayland::wayland_state_write(None);
 
     let surface = wayland_state.get_surface(surface_id);
     if surface.is_none() {
@@ -337,37 +339,96 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }),
         Some(path_str) => Configuration::from_file(PathBuf::from(path_str).as_path())?,
     };
-    let event_handler = configuration.get_event_handler();
+
+    let processing_sync = Arc::new((Mutex::new(false), Condvar::new()));
 
     {
-        let mut notification_manager = notification_manager_write();
-        notification_manager.set_event_handler(event_handler);
+        let mut notification_manager = notification_manager_write(None);
+        notification_manager.set_event_handler(configuration.get_event_handler());
         notification_manager.set_configuration(configuration);
+        notification_manager.set_notify_change_handler(Arc::clone(&processing_sync));
     }
 
-    let mut dbus_connection = _dbus::create_connection().unwrap();
-
-    let mut event_queue = {
+    let socket_manager = {
         let conn = Connection::connect_to_env().unwrap();
 
         let display = conn.display();
 
-        let mut event_queue = conn.new_event_queue();
+        let event_queue = conn.new_event_queue();
         let queue_handle = event_queue.handle();
 
         let _registry = display.get_registry(&queue_handle, ());
 
-        let mut wayland_state = wayland::wayland_state_write();
+        let mut socket_manager = wayland::SocketManager::new(event_queue);
+
+        let mut wayland_state = wayland::wayland_state_write(None);
         wayland_state.initialize(queue_handle, &display);
 
-        while wayland_state.pending_data_amount != 0 {
-            event_queue.roundtrip(&mut wayland_state).unwrap();
+        {
+            let event_queue = &mut socket_manager.event_queue;
+            while wayland_state.pending_data_amount != 0 {
+                event_queue.roundtrip(&mut wayland_state).unwrap();
+            }
         }
 
-        event_queue
+        socket_manager
     };
 
-    let mut socket_handler = wayland::SocketManager::new(&mut event_queue);
+    let socket_manager_locked = Arc::new(Mutex::new(socket_manager));
+
+    let wayland_sync = Arc::clone(&processing_sync);
+    let wayland_socket_manager = Arc::clone(&socket_manager_locked);
+
+    let wayland_worker_thread = thread::spawn(move || {
+        let processing_time = std::time::Duration::from_millis(200);
+
+        while !EXIT_REQUESTED.load(Ordering::Relaxed) {
+            let (lock, condition) = wayland_sync.as_ref();
+
+            if let Err(_) = lock.try_lock() {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+
+                continue;
+            }
+
+            let has_read_any_events = {
+                let mut manager = wayland_socket_manager.lock().unwrap();
+
+                manager.flush();
+                manager.wait_on_socket_ready(processing_time)
+            };
+
+            if has_read_any_events {
+                condition.notify_all();
+            }
+        }
+    });
+
+    let dbus_sync = Arc::clone(&processing_sync);
+    let mut dbus_connection = _dbus::create_connection(dbus_sync).unwrap();
+
+    let closed_notifications = Arc::new(RwLock::new(Vec::new()));
+    let closed_notifications_dbus = Arc::clone(&closed_notifications);
+
+    let dbus_worker_thread = thread::spawn(move || {
+        let processing_time = std::time::Duration::from_millis(1000);
+
+        while !EXIT_REQUESTED.load(Ordering::Relaxed) {
+            dbus_connection
+                .process(processing_time)
+                .expect("Error while processing DBus queue.");
+
+            {
+                let mut notifications = closed_notifications_dbus.write().unwrap();
+                for (id, reason) in notifications.iter() {
+                    _dbus::emit_notification_closed(&mut dbus_connection, *id, *reason as u32)
+                        .unwrap();
+                }
+                notifications.clear();
+            }
+        }
+    });
+
     let mut renderers_for_surfaces = HashMap::<wayland::SurfaceID, Renderer>::new();
 
     let mut manager_callback =
@@ -385,42 +446,64 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     signal::install_signal_handler(signal::PosixSignal::SIGINT, sigint_handler);
 
     while !EXIT_REQUESTED.load(Ordering::Relaxed) {
-        {
-            let mut wayland_state = wayland::wayland_state_write();
-            let trigger_queue = wayland_state.consume_trigger_events();
+        let (lock, condition) = processing_sync.as_ref();
 
-            let mut notification_manager = notification_manager_write();
-            notification_manager.add_event_triggers(trigger_queue);
+        let result =
+            condition.wait_timeout(lock.lock().unwrap(), std::time::Duration::from_millis(1000));
+        if let Ok((_, timeout_result)) = result {
+            if timeout_result.timed_out() {
+                continue;
+            }
         }
 
-        let closed_notifications = {
-            let mut notification_manager = notification_manager_write();
+        {
+            // Read pending trigger events and dispatch wayland events
+            let mut wayland_state = wayland::wayland_state_write(None);
+            let trigger_queue = wayland_state.consume_trigger_events();
+
+            if trigger_queue.len() != 0 {
+                let mut notification_manager = notification_manager_write(None);
+                notification_manager.add_event_triggers(trigger_queue);
+            }
+
+            let mut manager = socket_manager_locked.lock().unwrap();
+            manager.dispatch_events_in_queue(&mut wayland_state);
+        }
+
+        // Process active notifications
+        let newly_closed_notifications = {
+            let mut notification_manager = notification_manager_write(None);
             notification_manager.process_active_notifications(&mut manager_callback)
         };
 
         {
-            let mut wayland_state = wayland::wayland_state_write();
+            // Add closed notifications to shared list for later processing
+            let mut closed_notifications_guard = closed_notifications.write().unwrap();
+            closed_notifications_guard.extend(&mut newly_closed_notifications.into_iter());
+        }
+
+        {
+            // Destroy scheduled wayland surfaces
+            let mut wayland_state = wayland::wayland_state_write(None);
             wayland_state.destroy_scheduled_surfaces();
         }
 
-        for (id, reason) in closed_notifications {
-            _dbus::emit_notification_closed(&mut dbus_connection, id, reason as u32).unwrap();
-        }
-
-        socket_handler.handle(50);
-        dbus_connection
-            .process(std::time::Duration::from_millis(50))
-            .unwrap();
-
         if options.ephemeral {
-            let notification_manager = notification_manager_read();
+            let notification_manager = notification_manager_read(None);
             if notification_manager.has_had_any_notification()
                 && !notification_manager.has_any_active_notification()
             {
-                break;
+                EXIT_REQUESTED.store(true, Ordering::Relaxed);
             }
         }
     }
+
+    wayland_worker_thread
+        .join()
+        .expect("Failed to close Wayland worker thread.");
+    dbus_worker_thread
+        .join()
+        .expect("Failed to close DBus worker thread.");
 
     Ok(())
 }

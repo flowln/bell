@@ -6,8 +6,25 @@ macro_rules! generate_rw_accessors {
 
         static $backtrace: RwLock<Option<Backtrace>> = RwLock::new(None);
 
-        pub fn $read() -> RwLockReadGuard<'static, $state> {
-            match $var.try_read() {
+        pub fn $read(timeout: Option<std::time::Duration>) -> RwLockReadGuard<'static, $state> {
+            let mut guard_opt = $var.try_read();
+
+            if guard_opt.is_err() {
+                let timeout = timeout.unwrap_or(std::time::Duration::from_millis(5_000));
+                let time_now = std::time::Instant::now();
+
+                while time_now.elapsed() < timeout {
+                    guard_opt = $var.try_read();
+
+                    if guard_opt.is_ok() {
+                        break;
+                    }
+
+                    std::thread::sleep(std::time::Duration::from_millis(10))
+                }
+            }
+
+            match guard_opt {
                 Ok(guard) => guard,
                 Err(TryLockError::WouldBlock) => {
                     $panic();
@@ -21,8 +38,23 @@ macro_rules! generate_rw_accessors {
             }
         }
 
-        pub fn $write() -> RwLockWriteGuard<'static, $state> {
-            match $var.try_write() {
+        pub fn $write(timeout: Option<std::time::Duration>) -> RwLockWriteGuard<'static, $state> {
+            let mut guard_opt = $var.try_write();
+
+            if guard_opt.is_err() {
+                let timeout = timeout.unwrap_or(std::time::Duration::from_millis(5_000));
+                let time_now = std::time::Instant::now();
+
+                while time_now.elapsed() < timeout {
+                    guard_opt = $var.try_write();
+
+                    if guard_opt.is_ok() {
+                        break;
+                    }
+                }
+            }
+
+            match guard_opt {
                 Ok(guard) => {
                     $backtrace.try_write().unwrap().replace(Backtrace::capture());
 

@@ -1,4 +1,6 @@
 use std::error::Error;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use dbus::Message;
 use dbus::arg::{PropMap, RefArg};
@@ -68,7 +70,9 @@ create_struct_tuple_pair!(pub ImageData ImageDataTuple width:i32 height:i32 rows
 
 struct DBusData;
 
-pub fn create_connection() -> Result<Connection, Box<dyn Error>> {
+pub fn create_connection(
+    process_notification: Arc<(Mutex<bool>, Condvar)>,
+) -> Result<Connection, Box<dyn Error>> {
     let connection = Connection::new_session()?;
     connection.request_name(NOTIFICATION_BUS_INTERFACE_NAME, true, true, false)?;
 
@@ -85,12 +89,18 @@ pub fn create_connection() -> Result<Connection, Box<dyn Error>> {
             },
         );
 
+        let notification_sync = Arc::clone(&process_notification);
         bus.method(
             "Notify",
             DBUS_NOTIFY_PARAMETERS,
             ("id",),
             move |ctx: &mut Context, data: &mut DBusData, input| {
+                let (_, condition) = notification_sync.as_ref();
+
                 let reply = (handle_notify_message(ctx, data, input).unwrap(),);
+
+                condition.notify_all();
+
                 Ok(reply)
             },
         );
@@ -112,17 +122,26 @@ pub fn create_connection() -> Result<Connection, Box<dyn Error>> {
             },
         );
 
+        let close_notification_sync = Arc::clone(&process_notification);
         bus.method(
             "CloseNotification",
             ("id",),
             (),
             move |_ctx: &mut Context, _data: &mut DBusData, (id,): (u32,)| {
-                let mut notification_manager = notification_manager_write();
+                let mut notification_manager =
+                    notification_manager_write(Some(Duration::from_millis(5000)));
+
+                let close_notification_sync = Arc::clone(&close_notification_sync);
+                let (_, condition) = close_notification_sync.as_ref();
 
                 match notification_manager
                     .close_notification(id, NotificationCloseReason::Requested)
                 {
-                    Ok(_) => Ok(()),
+                    Ok(_) => {
+                        condition.notify_all();
+
+                        Ok(())
+                    }
                     Err(NotificationError::InvalidID(id)) => Err(MethodErr::invalid_arg(&id)),
                 }
             },
@@ -184,7 +203,7 @@ fn handle_notify_message(
 
     // The timeout time in milliseconds since the display of the notification at which
     // the notification should automatically close.
-    notification.expire_timeout = {
+    let expire_timeout = {
         if input.expire_timeout < 0 {
             // If -1, the notification's expiration time is dependent on the notification server's settings,
             // and may vary for the type of notification.
@@ -200,7 +219,7 @@ fn handle_notify_message(
         }
     };
 
-    let mut notification_manager = notification_manager_write();
+    let mut notification_manager = notification_manager_write(None);
     let configuration = notification_manager
         .get_configuration()
         .ok_or(MethodErr::failed(
@@ -222,6 +241,10 @@ fn handle_notify_message(
     } else {
         // If replaces_id is not 0, the returned value is the same value as replaces_id.
         notification_manager.replace_notification(id, notification);
+    }
+
+    if let Some(timeout) = expire_timeout {
+        notification_manager.set_timeout_for_notification(&id, timeout);
     }
 
     Ok(id)
