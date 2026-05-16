@@ -92,5 +92,7 @@ create_dbus_wrapper!(pub ServerCapsMessageOutput ServerCapsMessageOutputType cap
 create_dbus_wrapper!(pub NotifyMessageInput NotifyMessageInputType app_name:String replaces_id:u32 app_icon:String summary:String body:String actions:Vec<String> hints:PropMap expire_timeout:i32);
 create_dbus_wrapper!(pub NotifyMessageOutput NotifyMessageOutputType id:u32);
 
+create_dbus_wrapper!(pub CloseNotificationInput CloseNotificationInputType id:u32);
+
 create_dbus_signal_wrapper!(pub NotificationClosedSignal "NotificationClosed" id:u32 reason:u32);
 

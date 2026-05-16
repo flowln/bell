@@ -1,4 +1,3 @@
-use dbus::arg::{Append, Arg, RefArg};
 use dbus::blocking::Connection;
 
 use std::collections::HashMap;
@@ -39,6 +38,7 @@ struct ApplicationOptions {
     expire_timeout: bool,
     multiple_notifications: bool,
     body_markup: bool,
+    close_notification: bool,
 }
 
 impl Default for ApplicationOptions {
@@ -49,6 +49,7 @@ impl Default for ApplicationOptions {
             expire_timeout: false,
             multiple_notifications: false,
             body_markup: false,
+            close_notification: false,
         }
     }
 }
@@ -60,6 +61,7 @@ impl ApplicationOptions {
         self.expire_timeout = true;
         self.multiple_notifications = true;
         self.body_markup = true;
+        self.close_notification = true;
     }
 }
 
@@ -79,6 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--expire-timeout" => options.expire_timeout = true,
             "--multiple-notifications" => options.multiple_notifications = true,
             "--body-markup" => options.body_markup = true,
+            "--close-notification" => options.close_notification = true,
             "--help" => {
                 println!("freedesktop-notification-tester");
                 println!("");
@@ -92,6 +95,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "  --expire-timeout: Test support for the 'expire_timeout' notification argument.",
                     "  --multiple-notifications: Test support for multiple notifications at once.",
                     "  --body-markup: Test support for markup in body messages (bold, italic, underline).",
+                    "  --close-notification: Test support for closing a notification via DBus.",
                 ].join("\n"));
                 println!("  --help:      Show this help menu.");
                 println!("");
@@ -335,6 +339,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    if options.close_notification {
+        run_test("close-notification", || {
+            let output = send_notification(
+                &mut proxy,
+                NotifyMessageInput {
+                    app_name: String::from("freedesktop-notification-tester"),
+                    replaces_id: 0,
+                    app_icon: String::new(),
+                    summary: String::from("close-notification"),
+                    body: String::from(
+                        "This notification should close on its own after 2 seconds.",
+                    ),
+                    actions: Vec::new(),
+                    hints: HashMap::new(),
+                    expire_timeout: 0,
+                },
+            )
+            .expect("Failed to send notification");
+
+            println!("Notification was sent, waiting two seconds before sending a close request.");
+            std::thread::sleep(Duration::from_millis(2000));
+
+            let id = output.id;
+            match wait_for_notification_close_with_action(&mut proxy, id, Duration::from_secs(5), |proxy| {
+                println!("Sending close request for notification with id '{}'.", id);
+                let _r: Result<CloseNotificationInputType, dbus::Error> =
+                    proxy.method_call(NOTIFICATION_BUS_INTERFACE_NAME, "CloseNotification", (id,));
+            }) {
+                Ok(3) => println!("  Notification was successfully closed by a DBus call."),
+                _ => println!("  Failed to close notification via DBus call. "),
+            }
+        });
+    }
+
     Ok(())
 }
 
@@ -367,11 +405,25 @@ fn send_notification(
     }
 }
 
+
 fn wait_for_notification_close(
     proxy: &mut dbus::blocking::Proxy<'_, &Connection>,
     notification_id: u32,
     max_time_to_wait: Duration,
 ) -> Result<u32, dbus::Error> {
+    wait_for_notification_close_with_action(proxy, notification_id, max_time_to_wait, |_| {})
+}
+
+
+fn wait_for_notification_close_with_action<F>(
+    proxy: &mut dbus::blocking::Proxy<'_, &Connection>,
+    notification_id: u32,
+    max_time_to_wait: Duration,
+    mut pre_action: F
+) -> Result<u32, dbus::Error>
+where
+    F: FnMut(&mut dbus::blocking::Proxy<'_, &Connection>) -> ()
+{
     use std::sync::{Arc, Mutex};
 
     let condition = Arc::new(Mutex::new(u32::MAX));
@@ -390,6 +442,7 @@ fn wait_for_notification_close(
     let start_time = std::time::Instant::now();
 
     println!("Now waiting for the notification to close and the server to report so...");
+    pre_action(proxy);
     while start_time.elapsed() <= max_time_to_wait && *condition.lock().unwrap() == u32::MAX {
         proxy.connection.process(Duration::from_millis(100))?;
     }
