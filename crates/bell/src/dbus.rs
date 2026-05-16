@@ -168,7 +168,7 @@ pub fn emit_notification_closed(
     let mut message = Message::new_signal(
         NOTIFICATION_BUS_OBJECT_PATH,
         NOTIFICATION_BUS_INTERFACE_NAME,
-        "CloseNotification",
+        "NotificationClosed",
     )
     .unwrap();
 
