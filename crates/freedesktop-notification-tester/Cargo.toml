@@ -1,0 +1,7 @@
+[package]
+name = "freedesktop-notification-tester"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+dbus = "0.9.11"

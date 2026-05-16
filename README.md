@@ -11,6 +11,7 @@ Lightweight notification application for Wayland systems.
     - [Configuration file format](#configuration-file-format)
   - [Compatibility](#compatibility)
   - [References](#references)
+- [freedesktop-notification-tester](#freedesktop-notification-tester)
 
 ## Quickstart
 
@@ -176,3 +177,11 @@ While striving to be as independent and self-sufficient as possible, this projec
 - [libc](https://crates.io/crates/libc): Low-level interface to some required facilities (like `epoll` or `shm_open`).
 - [cosmic-text](https://crates.io/crates/cosmic-text): Text rendering facilities.
 - [png](https://crates.io/crates/png): Decoding of PNG icons.
+
+---
+
+# freedesktop-notification-tester
+
+This project also contains a crate for testing a server's implementation of the FreeDesktop notification specification. It is located in the [crates](./crates) subfolder.
+
+It is a command-line utility for communicating with a server through DBus, testing different notification parameters, automatically whenever possible, or with user interaction when necessary.
