@@ -100,7 +100,7 @@ impl Notification {
                 let (command, args_string) = command_string.split_once(' ').unwrap();
                 let args = args_string.split_whitespace();
 
-                if let Err(error) = Command::new(command).args(args).status() {
+                if let Err(error) = Command::new(command).args(args).spawn() {
                     eprintln!(
                         "Failed to execute command '{}' with args '{}': {}",
                         command, args_string, error
@@ -281,6 +281,10 @@ impl NotificationManager {
         self.active_notifications
             .insert(self.biggest_id_given, notification);
 
+        if let Some(handler) = &self.notify_change_handler {
+            handler.1.notify_all();
+        }
+
         self.biggest_id_given
     }
 
@@ -440,6 +444,10 @@ impl NotificationManager {
         );
 
         notification.expire();
+
+        if cfg!(debug_assertions) {
+            println!("Expired notification with id '{}' after {}ms have elapsed.", id, notification.creation_time.elapsed().as_millis());
+        }
 
         Ok(())
     }

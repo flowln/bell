@@ -349,7 +349,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         notification_manager.set_notify_change_handler(Arc::clone(&processing_sync));
     }
 
-    let socket_manager = {
+    let mut socket_manager = {
         let conn = Connection::connect_to_env().unwrap();
 
         let display = conn.display();
@@ -374,11 +374,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         socket_manager
     };
 
-    let socket_manager_locked = Arc::new(Mutex::new(socket_manager));
-
     let wayland_sync = Arc::clone(&processing_sync);
-    let wayland_socket_manager = Arc::clone(&socket_manager_locked);
-
     let wayland_worker_thread = thread::spawn(move || {
         let processing_time = std::time::Duration::from_millis(200);
 
@@ -392,13 +388,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let has_read_any_events = {
-                let mut manager = wayland_socket_manager.lock().unwrap();
-
-                manager.flush();
-                manager.wait_on_socket_ready(processing_time)
+                socket_manager.flush();
+                socket_manager.wait_on_socket_ready(processing_time)
             };
 
             if has_read_any_events {
+                { // Dispatch queued wayland events
+                    let mut wayland_state = wayland::wayland_state_write(None);
+                    socket_manager.dispatch_events_in_queue(&mut wayland_state);
+                }
+
                 condition.notify_all();
             }
         }
@@ -411,7 +410,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let closed_notifications_dbus = Arc::clone(&closed_notifications);
 
     let dbus_worker_thread = thread::spawn(move || {
-        let processing_time = std::time::Duration::from_millis(1000);
+        let processing_time = std::time::Duration::from_millis(200);
 
         while !EXIT_REQUESTED.load(Ordering::Relaxed) {
             dbus_connection
@@ -457,7 +456,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         {
-            // Read pending trigger events and dispatch wayland events
+            // Read pending trigger events
             let mut wayland_state = wayland::wayland_state_write(None);
             let trigger_queue = wayland_state.consume_trigger_events();
 
@@ -465,9 +464,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut notification_manager = notification_manager_write(None);
                 notification_manager.add_event_triggers(trigger_queue);
             }
-
-            let mut manager = socket_manager_locked.lock().unwrap();
-            manager.dispatch_events_in_queue(&mut wayland_state);
         }
 
         // Process active notifications
