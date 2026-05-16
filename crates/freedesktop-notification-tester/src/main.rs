@@ -38,6 +38,7 @@ struct ApplicationOptions {
     basic_notification: bool,
     expire_timeout: bool,
     multiple_notifications: bool,
+    body_markup: bool,
 }
 
 impl Default for ApplicationOptions {
@@ -47,6 +48,7 @@ impl Default for ApplicationOptions {
             basic_notification: false,
             expire_timeout: false,
             multiple_notifications: false,
+            body_markup: false,
         }
     }
 }
@@ -57,6 +59,7 @@ impl ApplicationOptions {
         self.basic_notification = true;
         self.expire_timeout = true;
         self.multiple_notifications = true;
+        self.body_markup = true;
     }
 }
 
@@ -75,6 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--basic-notification" => options.basic_notification = true,
             "--expire-timeout" => options.expire_timeout = true,
             "--multiple-notifications" => options.multiple_notifications = true,
+            "--body-markup" => options.body_markup = true,
             "--help" => {
                 println!("freedesktop-notification-tester");
                 println!("");
@@ -87,6 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "  --basic-notification: Test basic notification functionality (app_name, summary, body).",
                     "  --expire-timeout: Test support for the 'expire_timeout' notification argument.",
                     "  --multiple-notifications: Test support for multiple notifications at once.",
+                    "  --body-markup: Test support for markup in body messages (bold, italic, underline).",
                 ].join("\n"));
                 println!("  --help:      Show this help menu.");
                 println!("");
@@ -108,187 +113,240 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     if options.basic {
-        println!("\n=== Running 'basic' tests... ===\n");
-        test_method!(proxy "GetServerInformation" ServerInfoMessageOutput,ServerInfoMessageOutputType);
-        test_method!(proxy "GetCapabilities" ServerCapsMessageOutput,ServerCapsMessageOutputType);
+        run_test("basic", || {
+            test_method!(proxy "GetServerInformation" ServerInfoMessageOutput,ServerInfoMessageOutputType);
+            test_method!(proxy "GetCapabilities" ServerCapsMessageOutput,ServerCapsMessageOutputType);
+        });
     }
 
     if options.basic_notification {
-        println!("\n=== Running 'basic-notification' tests... ===\n");
-
-        let output_opt = send_notification(
-            &mut proxy,
-            NotifyMessageInput {
-                app_name: String::from("freedesktop-notification-tester"),
-                replaces_id: 0,
-                app_icon: String::new(),
-                summary: String::from("This is a summary."),
-                body: String::from("This is a message body.\nClose me to continue the tests."),
-                actions: Vec::new(),
-                hints: HashMap::new(),
-                expire_timeout: 0,
-            },
-        );
-
-        if let Some(output) = output_opt {
-            println!(
-                "  Successfully sent a notification, which acquire id '{}'.",
-                output.id
+        run_test("basic-notification", || {
+            let output_opt = send_notification(
+                &mut proxy,
+                NotifyMessageInput {
+                    app_name: String::from("freedesktop-notification-tester"),
+                    replaces_id: 0,
+                    app_icon: String::new(),
+                    summary: String::from("This is a summary."),
+                    body: String::from("This is a message body.\nClose me to continue the tests."),
+                    actions: Vec::new(),
+                    hints: HashMap::new(),
+                    expire_timeout: 0,
+                },
             );
 
-            let result =
-                wait_for_notification_close(&mut proxy, output.id, Duration::from_secs(20));
+            if let Some(output) = output_opt {
+                println!(
+                    "  Successfully sent a notification, which acquire id '{}'.",
+                    output.id
+                );
 
-            match &result {
-                Ok(1) => println!("  The notification has expired (timed out)."),
-                Ok(2) => println!("  The notification was dismissed by the user."),
-                Ok(3) => println!("  The notification was closed by a DBus call."),
-                Ok(u32::MAX) => {
-                    println!("  Did not receive a 'NotificationClosed' signal after 20 seconds...")
-                }
-                Ok(reason_id) => println!(
-                    "  The notification was closed via an unknown method (reason: {}).",
-                    reason_id
-                ),
-                Err(error) => {
-                    eprintln!(
-                        "  Failed to wait for a notification close signal: {}",
-                        error
-                    )
-                }
-            }
+                let result =
+                    wait_for_notification_close(&mut proxy, output.id, Duration::from_secs(20));
 
-            match result {
-                Ok(1) => println!(
-                    "The 'NotificationClosed' signal is being properly sent by the server. However, the server did not properly handle 'expire_timeout' = 0 and expired the notification."
-                ),
-                Ok(2 | 3) => println!(
-                    "The 'NotificationClosed' signal is being properly sent by the server."
-                ),
-                _ => {
-                    println!("It's possible that the server did not report a closed notification.")
+                match &result {
+                    Ok(1) => println!("  The notification has expired (timed out)."),
+                    Ok(2) => println!("  The notification was dismissed by the user."),
+                    Ok(3) => println!("  The notification was closed by a DBus call."),
+                    Ok(u32::MAX) => {
+                        println!(
+                            "  Did not receive a 'NotificationClosed' signal after 20 seconds..."
+                        )
+                    }
+                    Ok(reason_id) => println!(
+                        "  The notification was closed via an unknown method (reason: {}).",
+                        reason_id
+                    ),
+                    Err(error) => {
+                        eprintln!(
+                            "  Failed to wait for a notification close signal: {}",
+                            error
+                        )
+                    }
                 }
+
+                match result {
+                    Ok(1) => println!(
+                        "The 'NotificationClosed' signal is being properly sent by the server. However, the server did not properly handle 'expire_timeout' = 0 and expired the notification."
+                    ),
+                    Ok(2 | 3) => println!(
+                        "The 'NotificationClosed' signal is being properly sent by the server."
+                    ),
+                    _ => {
+                        println!(
+                            "It's possible that the server did not report a closed notification."
+                        )
+                    }
+                }
+            } else {
+                println!("Failed to send a notification.");
             }
-        } else {
-            println!("Failed to send a notification.");
-        }
+        });
     }
 
     if options.expire_timeout {
-        println!("\n=== Running 'expire-timeout' tests... ===\n");
+        run_test("expire-timeout", || {
+            let mut hints = HashMap::new();
+            hints.insert(String::from("transient"), as_variant!(true));
 
-        let mut hints = HashMap::new();
-        hints.insert(String::from("transient"), as_variant!(true));
-
-        let output_opt = send_notification(
-            &mut proxy,
-            NotifyMessageInput {
-                app_name: String::from("freedesktop-notification-tester"),
-                replaces_id: 0,
-                app_icon: String::new(),
-                summary: String::from("expire-timeout"),
-                body: String::from("This notification should expire in 2 seconds."),
-                actions: Vec::new(),
-                hints: hints,
-                expire_timeout: 2000,
-            },
-        );
-
-        if let Some(output) = output_opt {
-            println!(
-                "  Successfully sent a notification, which acquire id '{}'.",
-                output.id
+            let output_opt = send_notification(
+                &mut proxy,
+                NotifyMessageInput {
+                    app_name: String::from("freedesktop-notification-tester"),
+                    replaces_id: 0,
+                    app_icon: String::new(),
+                    summary: String::from("expire-timeout"),
+                    body: String::from("This notification should expire in 2 seconds."),
+                    actions: Vec::new(),
+                    hints: hints,
+                    expire_timeout: 2000,
+                },
             );
 
-            let result = wait_for_notification_close(&mut proxy, output.id, Duration::from_secs(3));
+            if let Some(output) = output_opt {
+                println!(
+                    "  Successfully sent a notification, which acquire id '{}'.",
+                    output.id
+                );
 
-            match &result {
-                Ok(1) => println!("  The notification has expired (timed out)."),
-                Ok(_) => {
-                    println!("  The notification did not close by timeout, as it was supposed to.")
-                }
-                Err(error) => {
-                    eprintln!(
-                        "  Failed to wait for a notification close signal: {}",
-                        error
-                    )
-                }
-            }
+                let result =
+                    wait_for_notification_close(&mut proxy, output.id, Duration::from_secs(3));
 
-            if let Ok(1) = result {
-                println!("The server has properly handled the 'expire_timeout' argument.");
+                match &result {
+                    Ok(1) => println!("  The notification has expired (timed out)."),
+                    Ok(_) => {
+                        println!(
+                            "  The notification did not close by timeout, as it was supposed to."
+                        )
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "  Failed to wait for a notification close signal: {}",
+                            error
+                        )
+                    }
+                }
+
+                if let Ok(1) = result {
+                    println!("The server has properly handled the 'expire_timeout' argument.");
+                }
+            } else {
+                println!("Failed to send a notification.");
             }
-        } else {
-            println!("Failed to send a notification.");
-        }
+        });
     }
 
     if options.multiple_notifications {
-        println!("\n=== Running 'multiple-notifications' tests... ===\n");
+        run_test("multiple-notifications", || {
+            let mut hints = HashMap::new();
+            hints.insert(String::from("transient"), as_variant!(true));
 
-        let mut hints = HashMap::new();
-        hints.insert(String::from("transient"), as_variant!(true));
+            let output_1_opt = send_notification(
+                &mut proxy,
+                NotifyMessageInput {
+                    app_name: String::from("freedesktop-notification-tester"),
+                    replaces_id: 0,
+                    app_icon: String::new(),
+                    summary: String::from("multiple-notifications"),
+                    body: String::from(
+                        "This is the #1 notification.\nIt will expire in 2 seconds.",
+                    ),
+                    actions: Vec::new(),
+                    hints: hints,
+                    expire_timeout: 2000,
+                },
+            );
 
-        let output_1_opt = send_notification(
-            &mut proxy,
-            NotifyMessageInput {
-                app_name: String::from("freedesktop-notification-tester"),
-                replaces_id: 0,
-                app_icon: String::new(),
-                summary: String::from("multiple-notifications"),
-                body: String::from("This is the #1 notification.\nIt will expire in 2 seconds."),
-                actions: Vec::new(),
-                hints: hints,
-                expire_timeout: 2000,
-            },
-        );
+            let mut hints = HashMap::new();
+            hints.insert(String::from("transient"), as_variant!(true));
 
-        let mut hints = HashMap::new();
-        hints.insert(String::from("transient"), as_variant!(true));
+            let output_2_opt = send_notification(
+                &mut proxy,
+                NotifyMessageInput {
+                    app_name: String::from("freedesktop-notification-tester"),
+                    replaces_id: 0,
+                    app_icon: String::new(),
+                    summary: String::from("multiple-notifications"),
+                    body: String::from(
+                        "This is the #2 notification.\nIt will expire in 3 seconds.",
+                    ),
+                    actions: Vec::new(),
+                    hints: hints,
+                    expire_timeout: 3000,
+                },
+            );
 
-        let output_2_opt = send_notification(
-            &mut proxy,
-            NotifyMessageInput {
-                app_name: String::from("freedesktop-notification-tester"),
-                replaces_id: 0,
-                app_icon: String::new(),
-                summary: String::from("multiple-notifications"),
-                body: String::from("This is the #2 notification.\nIt will expire in 3 seconds."),
-                actions: Vec::new(),
-                hints: hints,
-                expire_timeout: 3000,
-            },
-        );
+            let mut hints = HashMap::new();
+            hints.insert(String::from("transient"), as_variant!(true));
 
-        let mut hints = HashMap::new();
-        hints.insert(String::from("transient"), as_variant!(true));
+            let output_3_opt = send_notification(
+                &mut proxy,
+                NotifyMessageInput {
+                    app_name: String::from("freedesktop-notification-tester"),
+                    replaces_id: 0,
+                    app_icon: String::new(),
+                    summary: String::from("multiple-notifications"),
+                    body: String::from(
+                        "This is the #3 notification.\nIt will expire in 4 seconds.",
+                    ),
+                    actions: Vec::new(),
+                    hints: hints,
+                    expire_timeout: 4000,
+                },
+            );
 
-        let output_3_opt = send_notification(
-            &mut proxy,
-            NotifyMessageInput {
-                app_name: String::from("freedesktop-notification-tester"),
-                replaces_id: 0,
-                app_icon: String::new(),
-                summary: String::from("multiple-notifications"),
-                body: String::from("This is the #3 notification.\nIt will expire in 4 seconds."),
-                actions: Vec::new(),
-                hints: hints,
-                expire_timeout: 4000,
-            },
-        );
-
-        let ids = [output_1_opt, output_2_opt, output_3_opt].map(|opt| opt.unwrap().id);
-        for (idx, id) in ids.into_iter().enumerate() {
-            let out_res = wait_for_notification_close(&mut proxy, id, Duration::from_secs(5));
-            if let Ok(1) = out_res {
-                println!("  Notification #{} has closed with success.", idx + 1);
-            } else {
-                println!("  Notification #{} failed to close with success.", idx + 1);
+            let ids = [output_1_opt, output_2_opt, output_3_opt].map(|opt| opt.unwrap().id);
+            for (idx, id) in ids.into_iter().enumerate() {
+                let out_res = wait_for_notification_close(&mut proxy, id, Duration::from_secs(5));
+                if let Ok(1) = out_res {
+                    println!("  Notification #{} has closed with success.", idx + 1);
+                } else {
+                    println!("  Notification #{} failed to close with success.", idx + 1);
+                }
             }
-        }
+        });
+    }
+
+    if options.body_markup {
+        run_test("body-markup", || {
+            let output_opt = send_notification(
+                &mut proxy,
+                NotifyMessageInput {
+                    app_name: String::from("freedesktop-notification-tester"),
+                    replaces_id: 0,
+                    app_icon: String::new(),
+                    summary: String::from("body-markup"),
+                    body: String::from(
+                        "Close this notification to continue.\nThis is <b>bold</b>, <i>italic</i> and <u>underline</u>.\n<b><i><u>This is everything at once.</u></i></b>",
+                    ),
+                    actions: Vec::new(),
+                    hints: HashMap::new(),
+                    expire_timeout: 0,
+                },
+            );
+
+            if let Some(output) = output_opt {
+                let _ = wait_for_notification_close(&mut proxy, output.id, Duration::from_secs(20));
+
+                println!("  Test ran successfully.");
+            } else {
+                eprintln!("Failed to send notification.");
+            }
+        });
     }
 
     Ok(())
+}
+
+fn run_test<F>(test_name: &str, mut test_function: F)
+where
+    F: FnMut() -> (),
+{
+    println!("\n=== Running '{}' tests... ===\n", test_name);
+
+    test_function();
+
+    std::thread::sleep(Duration::from_millis(200));
 }
 
 fn send_notification(
