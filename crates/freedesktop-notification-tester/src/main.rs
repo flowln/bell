@@ -18,6 +18,13 @@ macro_rules! test_method {
             );
             println!("{}", method_out);
         } else {
+            let error = response_res.unwrap_err();
+            if error.name().unwrap_or_default() == "org.freedesktop.DBus.Error.NameHasNoOwner" {
+                eprintln!("No program has ownership of the notification bus. Is a server running?\n{}", error);
+
+                std::process::exit(1);
+            }
+
             println!(
                 "Method '{}' is not supported by the notification server.",
                 $method_name
