@@ -30,6 +30,9 @@ macro_rules! as_variant {
     ($value:literal) => {
         dbus::arg::Variant(Box::new($value) as Box<dyn dbus::arg::RefArg>)
     };
+    ($value:ident) => {
+        dbus::arg::Variant(Box::new($value.clone()) as Box<dyn dbus::arg::RefArg>)
+    };
 }
 
 struct ApplicationOptions {
@@ -39,6 +42,7 @@ struct ApplicationOptions {
     multiple_notifications: bool,
     body_markup: bool,
     close_notification: bool,
+    notification_sounds: bool,
 }
 
 impl Default for ApplicationOptions {
@@ -50,6 +54,7 @@ impl Default for ApplicationOptions {
             multiple_notifications: false,
             body_markup: false,
             close_notification: false,
+            notification_sounds: false,
         }
     }
 }
@@ -62,6 +67,7 @@ impl ApplicationOptions {
         self.multiple_notifications = true;
         self.body_markup = true;
         self.close_notification = true;
+        self.notification_sounds = true;
     }
 }
 
@@ -82,6 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--multiple-notifications" => options.multiple_notifications = true,
             "--body-markup" => options.body_markup = true,
             "--close-notification" => options.close_notification = true,
+            "--notification-sounds" => options.notification_sounds = true,
             "--help" => {
                 println!("freedesktop-notification-tester");
                 println!("");
@@ -96,6 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "  --multiple-notifications: Test support for multiple notifications at once.",
                     "  --body-markup: Test support for markup in body messages (bold, italic, underline).",
                     "  --close-notification: Test support for closing a notification via DBus.",
+                    "  --notification-sounds: Test support for sound features (default, suppress, sound-file, sound-name)",
                 ].join("\n"));
                 println!("  --help:      Show this help menu.");
                 println!("");
@@ -369,6 +377,109 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }) {
                 Ok(3) => println!("  Notification was successfully closed by a DBus call."),
                 _ => println!("  Failed to close notification via DBus call. "),
+            }
+        });
+    }
+
+    if options.notification_sounds {
+        run_test("notification-sounds", || {
+            {
+                let _ = send_notification(
+                    &mut proxy,
+                    NotifyMessageInput {
+                        app_name: String::from("freedesktop-notification-tester"),
+                        replaces_id: 0,
+                        app_icon: String::new(),
+                        summary: String::from("notification-sounds"),
+                        body: String::from(
+                            "This notification should play the default sound from the server configuration (if any).",
+                        ),
+                        actions: Vec::new(),
+                        hints: HashMap::new(),
+                        expire_timeout: 1000,
+                    },
+                )
+                .expect("Failed to send notification");
+
+                println!("Notification was sent, waiting a second before sending the next one.");
+                std::thread::sleep(Duration::from_millis(1000));
+            }
+
+            {
+                let mut hints = HashMap::new();
+                hints.insert(String::from("suppress-sound"), as_variant!(true));
+
+                let _ = send_notification(
+                    &mut proxy,
+                    NotifyMessageInput {
+                        app_name: String::from("freedesktop-notification-tester"),
+                        replaces_id: 0,
+                        app_icon: String::new(),
+                        summary: String::from("notification-sounds"),
+                        body: String::from(
+                            "This notification should not a sound at all (suppress-sound = true).",
+                        ),
+                        actions: Vec::new(),
+                        hints: hints,
+                        expire_timeout: 1000,
+                    },
+                )
+                .expect("Failed to send notification");
+
+                println!("Notification was sent, waiting a second before sending the next one.");
+                std::thread::sleep(Duration::from_millis(1000));
+            }
+
+            {
+                let mut hints = HashMap::new();
+                let sound_file = String::from("/usr/share/sounds/freedesktop/stereo/audio-test-signal.oga");
+                hints.insert(String::from("sound-file"), as_variant!(sound_file));
+
+                let _ = send_notification(
+                    &mut proxy,
+                    NotifyMessageInput {
+                        app_name: String::from("freedesktop-notification-tester"),
+                        replaces_id: 0,
+                        app_icon: String::new(),
+                        summary: String::from("notification-sounds"),
+                        body: format!(
+                            "This notification should play a test sound (using sound-file):\n{}", sound_file,
+                        ),
+                        actions: Vec::new(),
+                        hints: hints,
+                        expire_timeout: 2000,
+                    },
+                )
+                .expect("Failed to send notification");
+
+                println!("Notification was sent, waiting two seconds before sending the next one.");
+                std::thread::sleep(Duration::from_millis(2000));
+            }
+
+            {
+                let mut hints = HashMap::new();
+                let sound_name = String::from("audio-test-signal");
+                hints.insert(String::from("sound-name"), as_variant!(sound_name));
+
+                let _ = send_notification(
+                    &mut proxy,
+                    NotifyMessageInput {
+                        app_name: String::from("freedesktop-notification-tester"),
+                        replaces_id: 0,
+                        app_icon: String::new(),
+                        summary: String::from("notification-sounds"),
+                        body: format!(
+                            "This notification should play a test sound too (using sound-name):\n{}", sound_name,
+                        ),
+                        actions: Vec::new(),
+                        hints: hints,
+                        expire_timeout: 2000,
+                    },
+                )
+                .expect("Failed to send notification");
+
+                println!("Notification was sent, waiting two seconds before ending the test.");
+                std::thread::sleep(Duration::from_millis(2000));
             }
         });
     }
