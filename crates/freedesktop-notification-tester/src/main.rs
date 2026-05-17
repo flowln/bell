@@ -20,7 +20,10 @@ macro_rules! test_method {
         } else {
             let error = response_res.unwrap_err();
             if error.name().unwrap_or_default() == "org.freedesktop.DBus.Error.NameHasNoOwner" {
-                eprintln!("No program has ownership of the notification bus. Is a server running?\n{}", error);
+                eprintln!(
+                    "No program has ownership of the notification bus. Is a server running?\n{}",
+                    error
+                );
 
                 std::process::exit(1);
             }
@@ -42,44 +45,53 @@ macro_rules! as_variant {
     };
 }
 
-struct ApplicationOptions {
-    basic: bool,
-    basic_notification: bool,
-    expire_timeout: bool,
-    multiple_notifications: bool,
-    body_markup: bool,
-    close_notification: bool,
-    notification_sounds: bool,
-    urgency: bool,
-}
-
-impl Default for ApplicationOptions {
-    fn default() -> Self {
-        ApplicationOptions {
-            basic: true,
-            basic_notification: false,
-            expire_timeout: false,
-            multiple_notifications: false,
-            body_markup: false,
-            close_notification: false,
-            notification_sounds: false,
-            urgency: false,
+macro_rules! add_application_options {
+    ($($name:ident:$default:literal) +) => {
+        struct ApplicationOptions {
+            $(
+                $name: bool,
+            )+
         }
-    }
+
+        impl Default for ApplicationOptions {
+            fn default() -> Self {
+                ApplicationOptions {
+                    $(
+                        $name: $default,
+                    )+
+                }
+            }
+        }
+
+        impl ApplicationOptions {
+            pub fn enable_all(&mut self) {
+                $(
+                    self.$name = true;
+                )+
+            }
+
+            pub fn parse_option(&mut self, option: &str) {
+                match option.replace("-", "_").as_str() {
+                    $(
+                        stringify!($name) => self.$name = true,
+                    )+
+                    unrecognized => eprintln!("Unrecognized option '{}'", unrecognized),
+                }
+            }
+        }
+    };
 }
 
-impl ApplicationOptions {
-    pub fn enable_all(&mut self) {
-        self.basic = true;
-        self.basic_notification = true;
-        self.expire_timeout = true;
-        self.multiple_notifications = true;
-        self.body_markup = true;
-        self.close_notification = true;
-        self.notification_sounds = true;
-        self.urgency = true;
-    }
-}
+add_application_options!(
+    basic:true
+    basic_notification:false
+    expire_timeout:false
+    multiple_notifications:false
+    body_markup:false
+    close_notification:false
+    notification_sounds:false
+    urgency:false
+);
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut options = ApplicationOptions::default();
@@ -91,15 +103,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(argument) = args_iter.next() {
         match argument.as_str() {
             "--all" => options.enable_all(),
-            "--basic" => options.basic = true,
-            "--no-basic" => options.basic = false,
-            "--basic-notification" => options.basic_notification = true,
-            "--expire-timeout" => options.expire_timeout = true,
-            "--multiple-notifications" => options.multiple_notifications = true,
-            "--body-markup" => options.body_markup = true,
-            "--close-notification" => options.close_notification = true,
-            "--notification-sounds" => options.notification_sounds = true,
-            "--urgency" => options.urgency = true,
             "--help" => {
                 println!("freedesktop-notification-tester");
                 println!("");
@@ -124,7 +127,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 return Ok(());
             }
-            unrecognized => eprintln!("Unrecognized option '{}'", unrecognized),
+            "--no-basic" => options.basic = false,
+            option => options.parse_option(option),
         }
     }
 
@@ -382,11 +386,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::thread::sleep(Duration::from_millis(2000));
 
             let id = output.id;
-            match wait_for_notification_close_with_action(&mut proxy, id, Duration::from_secs(5), |proxy| {
-                println!("Sending close request for notification with id '{}'.", id);
-                let _r: Result<CloseNotificationInputType, dbus::Error> =
-                    proxy.method_call(NOTIFICATION_BUS_INTERFACE_NAME, "CloseNotification", (id,));
-            }) {
+            match wait_for_notification_close_with_action(
+                &mut proxy,
+                id,
+                Duration::from_secs(5),
+                |proxy| {
+                    println!("Sending close request for notification with id '{}'.", id);
+                    let _r: Result<CloseNotificationInputType, dbus::Error> = proxy.method_call(
+                        NOTIFICATION_BUS_INTERFACE_NAME,
+                        "CloseNotification",
+                        (id,),
+                    );
+                },
+            ) {
                 Ok(3) => println!("  Notification was successfully closed by a DBus call."),
                 _ => println!("  Failed to close notification via DBus call. "),
             }
@@ -444,7 +456,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             {
                 let mut hints = HashMap::new();
-                let sound_file = String::from("/usr/share/sounds/freedesktop/stereo/audio-test-signal.oga");
+                let sound_file =
+                    String::from("/usr/share/sounds/freedesktop/stereo/audio-test-signal.oga");
                 hints.insert(String::from("sound-file"), as_variant!(sound_file));
 
                 let _ = send_notification(
@@ -455,7 +468,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         app_icon: String::new(),
                         summary: String::from("notification-sounds"),
                         body: format!(
-                            "This notification should play a test sound (using sound-file):\n{}", sound_file,
+                            "This notification should play a test sound (using sound-file):\n{}",
+                            sound_file,
                         ),
                         actions: Vec::new(),
                         hints: hints,
@@ -555,7 +569,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
             );
 
-            println!("Sent all three notifications. Will check if the critical notification expires...");
+            println!(
+                "Sent all three notifications. Will check if the critical notification expires..."
+            );
 
             let id = critical_opt.unwrap().id;
             match wait_for_notification_close(&mut proxy, id, Duration::from_secs(5)) {
@@ -566,17 +582,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("  The notification has not expired, as was expected.");
                     }
 
-                    let _ = wait_for_notification_close_with_action(&mut proxy, id, Duration::from_secs(5), |proxy| {
-                        println!("Sending close request for notification with id '{}'.", id);
-                        let _r: Result<CloseNotificationInputType, dbus::Error> =
-                            proxy.method_call(NOTIFICATION_BUS_INTERFACE_NAME, "CloseNotification", (id,));
-                    });
+                    let _ = wait_for_notification_close_with_action(
+                        &mut proxy,
+                        id,
+                        Duration::from_secs(5),
+                        |proxy| {
+                            println!("Sending close request for notification with id '{}'.", id);
+                            let _r: Result<CloseNotificationInputType, dbus::Error> = proxy
+                                .method_call(
+                                    NOTIFICATION_BUS_INTERFACE_NAME,
+                                    "CloseNotification",
+                                    (id,),
+                                );
+                        },
+                    );
                 }
                 Err(error) => {
                     eprintln!("Error while waiting for notification: {}", error);
                 }
             }
-
         });
     }
 
@@ -606,12 +630,15 @@ fn send_notification(
     match r {
         Ok(response) => Some(NotifyMessageOutput::from(response)),
         Err(error) => {
-            eprintln!("Error sending notification: {} {}", error.name()?, error.message()?);
+            eprintln!(
+                "Error sending notification: {} {}",
+                error.name()?,
+                error.message()?
+            );
             None
         }
     }
 }
-
 
 fn wait_for_notification_close(
     proxy: &mut dbus::blocking::Proxy<'_, &Connection>,
@@ -621,15 +648,14 @@ fn wait_for_notification_close(
     wait_for_notification_close_with_action(proxy, notification_id, max_time_to_wait, |_| {})
 }
 
-
 fn wait_for_notification_close_with_action<F>(
     proxy: &mut dbus::blocking::Proxy<'_, &Connection>,
     notification_id: u32,
     max_time_to_wait: Duration,
-    mut pre_action: F
+    mut pre_action: F,
 ) -> Result<u32, dbus::Error>
 where
-    F: FnMut(&mut dbus::blocking::Proxy<'_, &Connection>) -> ()
+    F: FnMut(&mut dbus::blocking::Proxy<'_, &Connection>) -> (),
 {
     use std::sync::{Arc, Mutex};
 
