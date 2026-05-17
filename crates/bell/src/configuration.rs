@@ -337,6 +337,8 @@ pub enum EventResponse {
     CloseNotification,
     #[serde(rename = "exec")]
     ExecuteCommand(String),
+    #[serde(rename = "play-sound")]
+    PlaySound(String),
     #[serde(rename = "nothing")]
     Nothing,
 }
@@ -385,12 +387,19 @@ where
     Deserialize::deserialize(deserializer).map(|input: T| Arc::new(input))
 }
 
+fn default_sound() -> String {
+    String::from("/usr/share/sounds/freedesktop/stereo/message-new-instant.oga")
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct Configuration {
     #[serde(flatten)]
     #[serde(default)]
     #[serde(deserialize_with = "deserialize_arc")]
     default_output_config: Arc<OutputConfiguration>,
+
+    #[serde(default = "default_sound")]
+    pub default_sound: String,
 
     #[serde(default)]
     events: HashMap<EventTrigger, EventResponse>,

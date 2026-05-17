@@ -15,6 +15,8 @@ pub struct Notification {
     pub app_icon: Option<String>,
     pub image_data: Option<ImageData>,
 
+    pub sound_file: Option<String>,
+
     pub is_dirty: bool,
 
     creation_time: time::Instant,
@@ -34,6 +36,7 @@ impl Notification {
             body,
             app_icon: None,
             image_data: None,
+            sound_file: None,
             is_dirty: true,
             creation_time: time::Instant::now(),
             expire_timeout: None,
@@ -105,6 +108,40 @@ impl Notification {
                         "Failed to execute command '{}' with args '{}': {}",
                         command, args_string, error
                     );
+                }
+            }
+            EventResponse::PlaySound(sound_command) => {
+                use std::path::Path;
+                use std::process::Command;
+
+                match self.sound_file.as_ref() {
+                    Some(sound_file_path) => {
+                        let sound_file_exists = Path::new(sound_file_path).exists();
+
+                        if !sound_file_exists {
+                            eprintln!(
+                                "Sound file '{}' does not exist, but an event to play it was triggered.",
+                                sound_file_path
+                            );
+                            return true;
+                        }
+
+                        let (command, extra_args_string) =
+                            sound_command.split_once(' ').unwrap_or((sound_command, ""));
+                        let extra_args = extra_args_string.split_whitespace();
+
+                        if let Err(error) = Command::new(command)
+                            .args(extra_args)
+                            .arg(sound_file_path)
+                            .spawn()
+                        {
+                            eprintln!(
+                                "Failed to execute command '{} {}' with arg '{}': {}",
+                                sound_command, extra_args_string, sound_file_path, error
+                            );
+                        }
+                    }
+                    None => return true,
                 }
             }
             _ => {
@@ -446,7 +483,11 @@ impl NotificationManager {
         notification.expire();
 
         if cfg!(debug_assertions) {
-            println!("Expired notification with id '{}' after {}ms have elapsed.", id, notification.creation_time.elapsed().as_millis());
+            println!(
+                "Expired notification with id '{}' after {}ms have elapsed.",
+                id,
+                notification.creation_time.elapsed().as_millis()
+            );
         }
 
         Ok(())

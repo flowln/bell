@@ -81,6 +81,9 @@ from <i><app_name></i>
 # Icon theme to use when trying to render icons.
 icon_theme = "Adwaita"
 
+# Default sound to use with the 'play-sound' event. This is a global configuration, and cannot be changed between outputs.
+default_sound = "/usr/share/sounds/freedesktop/stereo/message.oga"
+
 # Special section for describing actions to perform upon interacting with the notification.
 #
 # The available triggers are:
@@ -91,9 +94,12 @@ icon_theme = "Adwaita"
 #   close-notification: Close all surfaces of the current notification.
 #   exec: Execute a custom command. The syntax for that is:
 #     trigger = { exec = "<command with arguments>" }
+#   play-sound: Play a sound, either specified in the notification or configured with the 'default_sound' option.
+#     This is different from 'exec' in that it respects the 'suppress-sound', 'sound-file' and 'sound-name' hints in notification that have them.
+#     The argument to it is the command-line utility to play the sound. It must support a file path being passed as a positional argument.
 [events]
 right-click = "close-notification"
-on-notification-received = { exec = "mpv /usr/share/sounds/freedesktop/stereo/message.oga" }
+on-notification-received = { play-sound = "mpv" }
 
 # Specify per-input options.
 [outputs."eDP-1"]

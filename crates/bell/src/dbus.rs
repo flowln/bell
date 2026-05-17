@@ -55,7 +55,7 @@ macro_rules! create_dbus_wrapper {
 create_dbus_wrapper!(NotifyMessageInput NotifyMessageInputType DBUS_NOTIFY_PARAMETERS app_name:String replaces_id:u32 app_icon:String summary:String body:String actions:Vec<String> hints:PropMap expire_timeout:i32);
 create_dbus_wrapper!(ServerInfoMessageOutput ServerInfoMessageOutputType DBUS_SERVER_INFO_PARAMETERS name:String vendor:String version:String spec_version:String);
 
-const CAPABILITIES: [&'static str; 3] = ["body", "body-markup", "icon-static"];
+const CAPABILITIES: [&'static str; 4] = ["body", "body-markup", "icon-static", "sound"];
 
 pub const NOTIFICATION_BUS_INTERFACE_NAME: &'static str = "org.freedesktop.Notifications";
 pub const NOTIFICATION_BUS_OBJECT_PATH: &'static str = "/org/freedesktop/Notifications";
@@ -225,6 +225,38 @@ fn handle_notify_message(
         .ok_or(MethodErr::failed(
             "Failed to retrieve configuration from notification manager.",
         ))?;
+
+    // Causes the server to suppress playing any sounds, if it has that ability.
+    let suppress_sound: bool = {
+        if let Some(suppress_hint) = input.hints.get("suppress-sound") {
+            *suppress_hint
+                .0
+                .as_any()
+                .downcast_ref::<bool>()
+                .unwrap_or(&false)
+        } else {
+            false
+        }
+    };
+
+    if !suppress_sound {
+        // The path to a sound file to play when the notification pops up.
+        let sound_file = match input.hints.get("sound-file") {
+            Some(file_path) => file_path.as_str().map(|s| s.to_owned()),
+            // A themeable named sound from the freedesktop.org sound naming specification
+            None => match input.hints.get("sound-name") {
+                // FIXME: Actually search for a valid sound theme on the system.
+                Some(sound_name) => Some(format!(
+                    "/usr/share/sounds/freedesktop/stereo/{}.oga",
+                    sound_name.as_str().unwrap_or_default()
+                )),
+                None => Some(configuration.default_sound.clone()),
+            },
+        };
+
+        notification.sound_file = sound_file;
+    }
+
     notification
         .try_make_surfaces(configuration)
         .ok_or(MethodErr::failed(
