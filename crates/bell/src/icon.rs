@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::io::{Error as IOError, ErrorKind as IOErrorKind};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::LazyLock;
 
@@ -120,8 +120,8 @@ pub fn retrieve_app_icon(
     }
 
     // A name in a freedesktop.org-compliant icon theme.
-    let icon_theme_path = match search_for_icon_theme(icon_theme) {
-        Some(icon_theme_path) => icon_theme_path,
+    let icon_theme_path_res = match search_for_icon_theme(icon_theme) {
+        Some(icon_theme_path) => Ok(icon_theme_path),
         None => {
             let missing_error = IOError::new(
                 IOErrorKind::NotFound,
@@ -133,23 +133,45 @@ pub fn retrieve_app_icon(
             );
 
             if icon_theme.is_some() {
-                search_for_icon_theme(None).ok_or(missing_error)?
+                search_for_icon_theme(None).ok_or(missing_error)
             } else {
-                Err(missing_error)?
+                Err(missing_error)
             }
         }
     };
 
-    if let Ok(icon_information) =
-        search_for_icon_in_icon_theme(app_icon, preferred_size, &icon_theme_path)
-    {
-        return Ok(icon_information);
+    if let Ok(icon_theme_path) = &icon_theme_path_res {
+        if let Ok(icon_information) =
+            search_for_icon_in_icon_theme(app_icon, preferred_size, &icon_theme_path)
+        {
+            return Ok(icon_information);
+        }
+
+        let parents = get_parents_of_icon_theme(&icon_theme_path)?;
+        for parent_icon_theme_name in parents {
+            let parent_icon_theme_path_res = search_for_icon_theme(Some(&parent_icon_theme_name));
+            if parent_icon_theme_path_res.is_none() {
+                continue;
+            }
+
+            let icon_information = search_for_icon_in_icon_theme(
+                app_icon,
+                preferred_size,
+                &parent_icon_theme_path_res.unwrap(),
+            );
+            if icon_information.is_ok() {
+                return icon_information;
+            }
+        }
     }
 
-    // TODO: Look in parent themes if not found.
     // TODO: Try to use fallback icon if all fails.
 
-    Err(IOError::from(IOErrorKind::NotFound))
+    if icon_theme_path_res.is_err() {
+        Err(icon_theme_path_res.unwrap_err())
+    } else {
+        Err(IOError::from(IOErrorKind::NotFound))
+    }
 }
 
 macro_rules! find_value {
@@ -408,6 +430,16 @@ fn get_size_distance_for_icon(
             unreachable!()
         }
     }
+}
+
+fn get_parents_of_icon_theme(icon_theme_path: &Path) -> Result<Vec<String>, IOError> {
+    let index_file_path = icon_theme_path.join("./index.theme");
+    let index_file_contents = std::fs::read_to_string(&index_file_path)?;
+
+    let mut inherits = get_field_from_ini_file(&index_file_contents, "Inherits")?;
+    inherits = inherits.trim_matches([' ', ',']);
+
+    Ok(inherits.split(',').map(|s| s.to_owned()).collect())
 }
 
 // https://specifications.freedesktop.org/icon-theme/latest/#directory_layout
