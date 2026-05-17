@@ -59,33 +59,37 @@ fn render_notification(
     let mut icon_size = 0;
     if let Some(app_icon) = &notification.app_icon {
         let preferred_icon_size = icon::IconSize { size: 16, scale: 1 };
-        let icon_information = retrieve_app_icon(
+        match retrieve_app_icon(
             app_icon.as_str(),
             urgency_spec.icon_theme.as_deref(),
             preferred_icon_size,
-        )
-        .unwrap();
+        ) {
+            Ok(icon_information) => {
+                let size = icon_information
+                    .icon_size
+                    .unwrap_or(preferred_icon_size)
+                    .scaled_size();
 
-        let size = icon_information
-            .icon_size
-            .unwrap_or(preferred_icon_size)
-            .scaled_size();
+                let x_position = 0i32 - padding_x as i32 - size as i32;
+                let y_position = padding_y as i32;
 
-        let x_position = 0i32 - padding_x as i32 - size as i32;
-        let y_position = padding_y as i32;
-
-        match icon_information.file_type {
-            icon::IconFileType::PNG => {
-                if let Err(error) =
-                    renderer.draw_png(x_position, y_position, size, size, &icon_information.path)
-                {
-                    eprintln!("Error drawing PNG icon: {}", error);
+                match icon_information.file_type {
+                    icon::IconFileType::PNG => {
+                        if let Err(error) =
+                            renderer.draw_png(x_position, y_position, size, size, &icon_information.path)
+                        {
+                            eprintln!("Error drawing PNG icon: {}", error);
+                        }
+                    }
+                    _ => {}
                 }
-            }
-            _ => {}
-        }
 
-        icon_size = size;
+                icon_size = size;
+            }
+            Err(error) => {
+                eprintln!("Failed to retrieve information for icon '{}': {}", app_icon, error);
+            }
+        }
     }
 
     let mut image_size = 0;
