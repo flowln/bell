@@ -211,7 +211,6 @@ impl Notification {
 
     pub fn has_timed_out(&self) -> bool {
         match self.expire_timeout {
-            Some(std::time::Duration::MAX) => self.creation_time.elapsed().as_secs() > 5,
             Some(_) => {
                 if let Some(thread_handle) = self.expire_timeout_thread_handle.as_ref() {
                     thread_handle.is_finished()
@@ -223,13 +222,14 @@ impl Notification {
         }
     }
 
-    pub(crate) fn set_timeout(&mut self, timeout: std::time::Duration) {
+    pub(crate) fn set_timeout(&mut self, mut timeout: std::time::Duration) {
         // TODO: Take handle into old thread (if it exists) and interrupt it.
 
         self.expire_timeout = Some(timeout);
 
         if timeout == std::time::Duration::MAX {
-            return;
+            // TODO: Use idle status to persist notifications when idling.
+            timeout = std::time::Duration::from_millis(5000);
         }
 
         // Critical notifications should not automatically expire, as they are things that the user will most likely want to know about.
