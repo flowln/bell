@@ -6,11 +6,43 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, RwLock};
 use std::time;
 
+#[derive(Debug, Eq, PartialEq)]
+pub enum NotificationUrgency {
+    Low,
+    Normal,
+    Critical,
+}
+
+impl From<u8> for NotificationUrgency {
+    fn from(byte: u8) -> Self {
+        match byte {
+            0 => Self::Low,
+            1 => Self::Normal,
+            2 => Self::Critical,
+            other => {
+                eprintln!("Got unexpected urgency level '{other}'.");
+                Self::Normal
+            }
+        }
+    }
+}
+
+impl ToString for NotificationUrgency {
+    fn to_string(&self) -> String {
+        String::from(match self {
+            Self::Low => "Low",
+            Self::Normal => "Normal",
+            Self::Critical => "Critical",
+        })
+    }
+}
+
 pub struct Notification {
     pub id: Option<u32>,
     pub app_name: String,
     pub summary: String,
     pub body: String,
+    pub urgency: NotificationUrgency,
 
     pub app_icon: Option<String>,
     pub image_data: Option<ImageData>,
@@ -34,6 +66,7 @@ impl Notification {
             app_name,
             summary,
             body,
+            urgency: NotificationUrgency::Normal,
             app_icon: None,
             image_data: None,
             sound_file: None,
@@ -72,7 +105,8 @@ impl Notification {
                         wlr_surface.set_anchor(anchor);
                     }
 
-                    if let Some(layer) = spec.layer {
+                    let config = spec.get_by_urgency(&self.urgency.to_string());
+                    if let Some(layer) = config.layer {
                         wlr_surface.set_layer(layer);
                     }
 
@@ -178,11 +212,13 @@ impl Notification {
     pub fn has_timed_out(&self) -> bool {
         match self.expire_timeout {
             Some(std::time::Duration::MAX) => self.creation_time.elapsed().as_secs() > 5,
-            Some(_) => self
-                .expire_timeout_thread_handle
-                .as_ref()
-                .expect("Timeout value with no associated thread")
-                .is_finished(),
+            Some(_) => {
+                if let Some(thread_handle) = self.expire_timeout_thread_handle.as_ref() {
+                    thread_handle.is_finished()
+                } else {
+                    false
+                }
+            }
             None => false,
         }
     }
@@ -193,6 +229,11 @@ impl Notification {
         self.expire_timeout = Some(timeout);
 
         if timeout == std::time::Duration::MAX {
+            return;
+        }
+
+        // Critical notifications should not automatically expire, as they are things that the user will most likely want to know about.
+        if self.urgency == NotificationUrgency::Critical {
             return;
         }
 

@@ -15,7 +15,7 @@ mod render;
 mod signal;
 mod wayland;
 
-use crate::configuration::TextOptions;
+use crate::configuration::{TextOptions, UrgencyConfiguration};
 use crate::dbus as _dbus;
 use configuration::Configuration;
 use icon::retrieve_app_icon;
@@ -35,17 +35,22 @@ unsafe fn sigint_handler() {
 fn render_notification(
     renderer: &mut Renderer,
     notification: &Notification,
-    spec: &OutputConfiguration,
+    _spec: &OutputConfiguration,
+    urgency_spec: &Arc<UrgencyConfiguration>,
 ) -> Option<()> {
     renderer.clear(None);
 
     let mut padding_x = 10usize;
     let mut padding_y = 10usize;
 
-    if let Some(border_size) = spec.border_size
+    if let Some(border_size) = urgency_spec.border_size
         && border_size != 0
     {
-        renderer.draw_border(border_size, spec.border_radius, spec.border_color?);
+        renderer.draw_border(
+            border_size,
+            urgency_spec.border_radius,
+            urgency_spec.border_color?,
+        );
 
         padding_x += border_size;
         padding_y += border_size;
@@ -56,7 +61,7 @@ fn render_notification(
         let preferred_icon_size = icon::IconSize { size: 16, scale: 1 };
         let icon_information = retrieve_app_icon(
             app_icon.as_str(),
-            spec.icon_theme.as_deref(),
+            urgency_spec.icon_theme.as_deref(),
             preferred_icon_size,
         )
         .unwrap();
@@ -103,7 +108,7 @@ fn render_notification(
 
     use cosmic_text::Family;
     let mut default_text_opts = render::text::Attrs::new();
-    if let Some(font_family) = &spec.font_family {
+    if let Some(font_family) = &urgency_spec.font_family {
         let family = match font_family.as_str() {
             "Serif" | "serif" => Family::Serif,
             "SansSerif" | "sansserif" => Family::SansSerif,
@@ -118,7 +123,7 @@ fn render_notification(
 
     let mut text_span = Vec::<(String, Attrs)>::new();
 
-    let text_opts_to_attrs = |text_options: &TextOptions, default_opts: Option<&TextOptions>| {
+    let text_opts_to_attrs = |text_options: TextOptions, default_opts: Option<&TextOptions>| {
         let default_opt_default = TextOptions::default();
         let default_opt_values = default_opts.unwrap_or(&default_opt_default);
 
@@ -144,14 +149,12 @@ fn render_notification(
         attrs
     };
 
-    spec.get_message_layout(|text_fragment, text_options| {
-        let attrs = text_opts_to_attrs(&text_options, None);
-
+    urgency_spec.get_message_layout(|text_fragment, text_options| {
         let mut parse_recurse = |text: &str| {
-            let spans = spec.parse_layout(text);
+            let spans = urgency_spec.parse_layout(text, Some(text_options.clone()));
             let parsed_spans = spans
                 .into_iter()
-                .map(|(text, opts)| (text, text_opts_to_attrs(&opts, Some(&text_options))));
+                .map(|(text, opts)| (text, text_opts_to_attrs(opts, Some(&text_options))));
             text_span.extend(parsed_spans);
         };
 
@@ -160,6 +163,7 @@ fn render_notification(
             "summary" => parse_recurse(&notification.summary),
             "body" => parse_recurse(&notification.body),
             _ => {
+                let attrs = text_opts_to_attrs(text_options, None);
                 text_span.push((text_fragment, attrs));
             }
         }
@@ -227,6 +231,7 @@ fn process_surface(
     let will_destroy = surface.will_destroy_later() || notification.has_timed_out();
 
     let output_spec = notification.get_output_spec(&output_name).unwrap();
+    let output_urgency_spec = output_spec.get_by_urgency(&notification.urgency.to_string());
     let try_rendering = |offset: i32| {
         if notification.is_dirty || surface.is_dirty {
             if !renderers_for_surfaces.contains_key(surface_id) {
@@ -235,7 +240,7 @@ fn process_surface(
                     Renderer::new(
                         surface.surface_width as usize,
                         surface.surface_height as usize,
-                        output_spec.background_color?,
+                        output_urgency_spec.background_color?,
                     ),
                 );
             }
@@ -259,7 +264,7 @@ fn process_surface(
 
             renderer.set_buffer_scale(surface.get_buffer_scale());
 
-            render_notification(renderer, notification, output_spec);
+            render_notification(renderer, notification, output_spec, &output_urgency_spec);
             surface.write(renderer.get_backing_store());
         }
 
@@ -393,7 +398,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             if has_read_any_events {
-                { // Dispatch queued wayland events
+                {
+                    // Dispatch queued wayland events
                     let mut wayland_state = wayland::wayland_state_write(None);
                     socket_manager.dispatch_events_in_queue(&mut wayland_state);
                 }

@@ -219,6 +219,17 @@ fn handle_notify_message(
         }
     };
 
+    // Notifications have an urgency level associated with them. This defines the importance of the notification.
+    let urgency_level = {
+        if let Some(urgency_variant) = input.hints.get("urgency") {
+            *urgency_variant.0.as_any().downcast_ref::<u8>().unwrap()
+        } else {
+            1u8
+        }
+    };
+
+    notification.urgency = urgency_level.into();
+
     let mut notification_manager = notification_manager_write(None);
     let configuration = notification_manager
         .get_configuration()

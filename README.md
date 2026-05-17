@@ -158,6 +158,12 @@ top = 2
 right = 2
 bottom = 2
 left = 2
+
+# You can also specify different configurations for particular urgency levels.
+# There are three documented urgency levels: 'Low', 'Normal' and 'Critical'.
+[outputs."eDP-1".urgency.Critical]
+background_color = 0xFF806060
+border_color = 0xFFCC4040
 ```
 
 ## Compatibility

@@ -110,16 +110,80 @@ where
     deserializer.deserialize_str(LayerVisitor)
 }
 
+struct OutputsVisitor;
+impl<'de> Visitor<'de> for OutputsVisitor {
+    type Value = HashMap<String, Arc<OutputConfiguration>>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a map of output names to pointers to configuration")
+    }
+
+    fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
+    where
+        M: MapAccess<'de>,
+    {
+        let mut map = HashMap::with_capacity(access.size_hint().unwrap_or(0));
+
+        while let Some((key, value)) = access.next_entry()? {
+            map.insert(key, Arc::new(value));
+        }
+
+        Ok(map)
+    }
+}
+fn deserialize_outputs<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, Arc<OutputConfiguration>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserializer.deserialize_map(OutputsVisitor)
+}
+
+struct UrgencyVisitor;
+impl<'de> Visitor<'de> for UrgencyVisitor {
+    type Value = HashMap<String, Arc<UrgencyConfiguration>>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a map of output names to pointers to configuration")
+    }
+
+    fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
+    where
+        M: MapAccess<'de>,
+    {
+        let mut map = HashMap::with_capacity(access.size_hint().unwrap_or(0));
+
+        while let Some((key, value)) = access.next_entry()? {
+            map.insert(key, Arc::new(value));
+        }
+
+        Ok(map)
+    }
+}
+fn deserialize_urgency<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, Arc<UrgencyConfiguration>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserializer.deserialize_map(UrgencyVisitor)
+}
+
+fn deserialize_arc<'de, D, T>(deserializer: D) -> Result<Arc<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Deserialize::deserialize(deserializer).map(|input: T| Arc::new(input))
+}
+
+fn default_sound() -> String {
+    String::from("/usr/share/sounds/freedesktop/stereo/message-new-instant.oga")
+}
+
 #[derive(Debug, Deserialize)]
-pub struct OutputConfiguration {
-    #[serde(default)]
-    pub enabled: Option<bool>,
-
-    #[serde(default)]
-    pub width: Option<i32>,
-    #[serde(default)]
-    pub height: Option<i32>,
-
+pub struct UrgencyConfiguration {
     #[serde(default)]
     pub message_layout: Option<String>,
 
@@ -146,21 +210,124 @@ pub struct OutputConfiguration {
     #[serde(default)]
     pub border_radius: Option<usize>,
 
+    #[serde(deserialize_with = "deserialize_layer")]
+    #[serde(default)]
+    pub layer: Option<Layer>,
+}
+
+impl Default for UrgencyConfiguration {
+    fn default() -> Self {
+        UrgencyConfiguration {
+            message_layout: Some("<summary> from <app_name>\n<body>".to_owned()),
+            font_family: None,
+            font_size: Some(14.0),
+            text_color: Some(Color::rgba(0xFF, 0xFF, 0xFF, 0xFF)),
+            background_color: Some(Color::rgba(0x00, 0x00, 0x00, 0xFF)),
+            icon_theme: Some("Adwaita".to_owned()), // FIXME: Maybe we should instead leave it as None by default?
+            border_color: Some(Color::rgba(0x00, 0x00, 0x00, 0xFF)),
+            border_size: Some(0),
+            border_radius: Some(4),
+            layer: Some(Layer::Top),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OutputConfiguration {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+
+    #[serde(default)]
+    pub width: Option<i32>,
+    #[serde(default)]
+    pub height: Option<i32>,
+
     #[serde(deserialize_with = "deserialize_anchor")]
     #[serde(default)]
     pub anchor: Option<Anchor>,
     #[serde(default)]
     pub direction: Option<GrowthDirection>,
 
-    #[serde(deserialize_with = "deserialize_layer")]
-    #[serde(default)]
-    pub layer: Option<Layer>,
-
     #[serde(default)]
     pub margins: Option<Margin>,
+
+    #[serde(flatten)]
+    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_arc")]
+    pub default_urgency: Arc<UrgencyConfiguration>,
+
+    #[serde(default)]
+    #[serde(rename = "urgency")]
+    #[serde(deserialize_with = "deserialize_urgency")]
+    pub urgencies: HashMap<String, Arc<UrgencyConfiguration>>,
 }
 
-#[derive(Copy, Clone, Default)]
+impl Default for OutputConfiguration {
+    fn default() -> Self {
+        OutputConfiguration {
+            enabled: None,
+            width: Some(260),
+            height: Some(125),
+            anchor: Some(Anchor::Right | Anchor::Bottom),
+            direction: Some(GrowthDirection::default()),
+            margins: Some(Margin::default()),
+            default_urgency: Arc::new(UrgencyConfiguration::default()),
+            urgencies: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Hash)]
+pub enum EventTrigger {
+    #[serde(rename = "left-click")]
+    OnLeftClick,
+    #[serde(rename = "right-click")]
+    OnRightClick,
+    #[serde(rename = "middle-click")]
+    OnMiddleClick,
+    #[serde(rename = "on-notification-received")]
+    OnNotificationReceived,
+    #[serde(rename = "on-notification-closed")]
+    OnNotificationClosed,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub enum EventResponse {
+    #[serde(rename = "close-notification")]
+    CloseNotification,
+    #[serde(rename = "exec")]
+    ExecuteCommand(String),
+    #[serde(rename = "play-sound")]
+    PlaySound(String),
+    #[serde(rename = "nothing")]
+    Nothing,
+}
+
+impl Default for EventResponse {
+    fn default() -> Self {
+        EventResponse::Nothing
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct Configuration {
+    #[serde(flatten)]
+    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_arc")]
+    default_output_config: Arc<OutputConfiguration>,
+
+    #[serde(default = "default_sound")]
+    pub default_sound: String,
+
+    #[serde(default)]
+    events: HashMap<EventTrigger, EventResponse>,
+
+    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_outputs")]
+    outputs: HashMap<String, Arc<OutputConfiguration>>,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
 pub struct TextOptions {
     pub font_size: f32,
     pub text_color: u32,
@@ -178,17 +345,15 @@ macro_rules! with_other {
 macro_rules! with_other_owned {
     ( $self:expr,$other:expr,$($field:ident) + ) => {{ $( $self.$field = $self.$field.as_ref().or($other.$field.as_ref()).map(|i| i.clone()); )+ }};
 }
-impl OutputConfiguration {
-    pub fn complete_missing(&mut self, other: &OutputConfiguration) {
-        with_other!(self, other, enabled);
-        with_other!(self, other, width height);
+impl UrgencyConfiguration {
+    pub fn complete_missing(&mut self, other: &UrgencyConfiguration) {
         with_other_owned!(self, other, message_layout);
         with_other_owned!(self, other, font_family);
         with_other!(self, other, font_size text_color);
         with_other!(self, other, background_color);
         with_other_owned!(self, other, icon_theme);
         with_other!(self, other, border_color border_size border_radius);
-        with_other!(self, other, anchor direction layer margins);
+        with_other!(self, other, layer);
     }
 
     pub fn get_message_layout<T>(
@@ -198,17 +363,21 @@ impl OutputConfiguration {
         let mut spans = Vec::<T>::new();
 
         let layout = self.message_layout.as_ref().unwrap();
-        for (fragment, options) in self.parse_layout(layout) {
+        for (fragment, options) in self.parse_layout(layout, None) {
             spans.push(render_fragment(fragment, options));
         }
 
         spans
     }
 
-    pub fn parse_layout(&self, layout: &str) -> Vec<(String, TextOptions)> {
+    pub fn parse_layout(
+        &self,
+        layout: &str,
+        starting_text_options: Option<TextOptions>,
+    ) -> Vec<(String, TextOptions)> {
         let mut parsed_fragments = Vec::new();
 
-        let mut current_text_options = TextOptions::default();
+        let mut current_text_options = starting_text_options.unwrap_or_default();
         for chunk in layout.split(['<', '>']) {
             if chunk.len() == 0 {
                 continue;
@@ -223,7 +392,7 @@ impl OutputConfiguration {
                 "/u" => current_text_options.underline = false,
                 fragment => {
                     let (parsed_fragment, font_size, text_color) =
-                        self.parse_layout_fragment(fragment);
+                        self.parse_layout_fragment(fragment, starting_text_options);
 
                     current_text_options.font_size = font_size;
                     current_text_options.text_color = text_color;
@@ -236,12 +405,32 @@ impl OutputConfiguration {
         parsed_fragments
     }
 
-    fn parse_layout_fragment(&self, layout_fragment: &str) -> (String, f32, u32) {
+    fn parse_layout_fragment(
+        &self,
+        layout_fragment: &str,
+        default_options: Option<TextOptions>,
+    ) -> (String, f32, u32) {
         let fragment_split = layout_fragment.split(['=', ' ']).collect::<Vec<&str>>();
         let mut fragment_index = 0;
 
         let mut font_size = None;
         let mut text_color = None;
+
+        let default_font_size = {
+            if default_options.is_some() {
+                default_options.unwrap().font_size
+            } else {
+                self.font_size.unwrap()
+            }
+        };
+
+        let default_text_color = {
+            if default_options.is_some() {
+                Color(default_options.unwrap().text_color)
+            } else {
+                self.text_color.unwrap()
+            }
+        };
 
         loop {
             match fragment_split.as_slice()[fragment_index..] {
@@ -288,125 +477,33 @@ impl OutputConfiguration {
 
         (
             fragment,
-            font_size.unwrap_or(self.font_size.unwrap()),
-            text_color.unwrap_or(self.text_color.unwrap()).0,
+            font_size.unwrap_or(default_font_size),
+            text_color.unwrap_or(default_text_color).0,
         )
     }
 }
+impl OutputConfiguration {
+    pub fn complete_missing(&mut self, other: &OutputConfiguration) {
+        with_other!(self, other, enabled);
+        with_other!(self, other, width height);
+        with_other!(self, other, anchor direction margins);
 
-impl Default for OutputConfiguration {
-    fn default() -> Self {
-        OutputConfiguration {
-            enabled: None,
-            width: Some(260),
-            height: Some(125),
-            message_layout: Some("<summary> from <app_name>\n<body>".to_owned()),
-            font_family: None,
-            font_size: Some(14.0),
-            text_color: Some(Color::rgba(0xFF, 0xFF, 0xFF, 0xFF)),
-            background_color: Some(Color::rgba(0x00, 0x00, 0x00, 0xFF)),
-            icon_theme: Some("Adwaita".to_owned()), // FIXME: Maybe we should instead leave it as None by default?
-            border_color: Some(Color::rgba(0x00, 0x00, 0x00, 0xFF)),
-            border_size: Some(0),
-            border_radius: Some(4),
-            anchor: Some(Anchor::Right | Anchor::Bottom),
-            direction: Some(GrowthDirection::default()),
-            layer: Some(Layer::Top),
-            margins: Some(Margin::default()),
+        Arc::get_mut(&mut self.default_urgency)
+            .unwrap()
+            .complete_missing(&other.default_urgency);
+
+        for (urgency_key, urgency) in self.urgencies.iter_mut() {
+            if other.urgencies.contains_key(urgency_key) {
+                Arc::get_mut(urgency)
+                    .unwrap()
+                    .complete_missing(other.urgencies.get(urgency_key).as_ref().unwrap());
+            }
         }
     }
-}
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Hash)]
-pub enum EventTrigger {
-    #[serde(rename = "left-click")]
-    OnLeftClick,
-    #[serde(rename = "right-click")]
-    OnRightClick,
-    #[serde(rename = "middle-click")]
-    OnMiddleClick,
-    #[serde(rename = "on-notification-received")]
-    OnNotificationReceived,
-    #[serde(rename = "on-notification-closed")]
-    OnNotificationClosed,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub enum EventResponse {
-    #[serde(rename = "close-notification")]
-    CloseNotification,
-    #[serde(rename = "exec")]
-    ExecuteCommand(String),
-    #[serde(rename = "play-sound")]
-    PlaySound(String),
-    #[serde(rename = "nothing")]
-    Nothing,
-}
-
-impl Default for EventResponse {
-    fn default() -> Self {
-        EventResponse::Nothing
+    pub fn get_by_urgency(&self, urgency: &str) -> Arc<UrgencyConfiguration> {
+        Arc::clone(self.urgencies.get(urgency).unwrap_or(&self.default_urgency))
     }
-}
-
-struct OutputsVisitor;
-impl<'de> Visitor<'de> for OutputsVisitor {
-    type Value = HashMap<String, Arc<OutputConfiguration>>;
-
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-        formatter.write_str("a map of output names to pointers to configuration")
-    }
-
-    fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
-    where
-        M: MapAccess<'de>,
-    {
-        let mut map = HashMap::with_capacity(access.size_hint().unwrap_or(0));
-
-        while let Some((key, value)) = access.next_entry()? {
-            map.insert(key, Arc::new(value));
-        }
-
-        Ok(map)
-    }
-}
-fn deserialize_outputs<'de, D>(
-    deserializer: D,
-) -> Result<HashMap<String, Arc<OutputConfiguration>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    deserializer.deserialize_map(OutputsVisitor)
-}
-
-fn deserialize_arc<'de, D, T>(deserializer: D) -> Result<Arc<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: serde::Deserialize<'de>,
-{
-    Deserialize::deserialize(deserializer).map(|input: T| Arc::new(input))
-}
-
-fn default_sound() -> String {
-    String::from("/usr/share/sounds/freedesktop/stereo/message-new-instant.oga")
-}
-
-#[derive(Debug, Default, Deserialize)]
-pub struct Configuration {
-    #[serde(flatten)]
-    #[serde(default)]
-    #[serde(deserialize_with = "deserialize_arc")]
-    default_output_config: Arc<OutputConfiguration>,
-
-    #[serde(default = "default_sound")]
-    pub default_sound: String,
-
-    #[serde(default)]
-    events: HashMap<EventTrigger, EventResponse>,
-
-    #[serde(default)]
-    #[serde(deserialize_with = "deserialize_outputs")]
-    outputs: HashMap<String, Arc<OutputConfiguration>>,
 }
 
 const ENV_VARIABLES: [&'static str; 2] = ["XDG_CONFIG_HOME", "HOME"];
@@ -502,13 +599,24 @@ impl Configuration {
     }
 
     fn populate_outputs_with_default(&mut self) {
-        Arc::get_mut(&mut self.default_output_config)
-            .unwrap()
-            .complete_missing(&OutputConfiguration::default());
-        for output_configuration in self.outputs.values_mut() {
-            Arc::get_mut(output_configuration)
+        let global_conf = Arc::get_mut(&mut self.default_output_config).unwrap();
+        global_conf.complete_missing(&OutputConfiguration::default());
+
+        for urgency in global_conf.urgencies.values_mut() {
+            Arc::get_mut(urgency)
                 .unwrap()
-                .complete_missing(&self.default_output_config);
+                .complete_missing(&global_conf.default_urgency);
+        }
+
+        for output_configuration in self.outputs.values_mut() {
+            let conf = Arc::get_mut(output_configuration).unwrap();
+            conf.complete_missing(&self.default_output_config);
+
+            for urgency in conf.urgencies.values_mut() {
+                Arc::get_mut(urgency)
+                    .unwrap()
+                    .complete_missing(&conf.default_urgency);
+            }
         }
     }
 }
@@ -589,20 +697,20 @@ fn test_single_output_complete() {
     assert_eq!(output_spec.height.unwrap(), 150);
 
     assert_eq!(
-        output_spec.background_color.unwrap(),
+        output_spec.default_urgency.background_color.unwrap(),
         Color::rgba(0xAD, 0xBE, 0xEF, 0xDE)
     );
 
     assert_eq!(
-        output_spec.border_color.unwrap(),
+        output_spec.default_urgency.border_color.unwrap(),
         Color::rgba(0xEF, 0xDE, 0xAD, 0xBE)
     );
-    assert_eq!(output_spec.border_size.unwrap(), 2);
+    assert_eq!(output_spec.default_urgency.border_size.unwrap(), 2);
 
     assert_eq!(output_spec.anchor.unwrap(), Anchor::Left | Anchor::Top);
     assert_eq!(output_spec.direction.unwrap(), GrowthDirection::Down);
 
-    assert_eq!(output_spec.layer.unwrap(), Layer::Overlay);
+    assert_eq!(output_spec.default_urgency.layer.unwrap(), Layer::Overlay);
 
     assert_eq!(
         output_spec.margins.unwrap(),
@@ -693,12 +801,12 @@ fn test_default_output_with_override() {
     assert_eq!(output_spec.width.unwrap(), 123);
     assert_eq!(output_spec.height.unwrap(), 789);
 
-    assert_eq!(output_spec.border_size.unwrap(), 2);
+    assert_eq!(output_spec.default_urgency.border_size.unwrap(), 2);
 
     // Test that values not specified in neither the global nor the
     // per-output configuration still give their default value.
-    assert!(output_spec.layer.is_some());
-    assert_eq!(output_spec.layer.unwrap(), Layer::Top);
+    assert!(output_spec.default_urgency.layer.is_some());
+    assert_eq!(output_spec.default_urgency.layer.unwrap(), Layer::Top);
 }
 
 #[test]
@@ -816,11 +924,20 @@ fn test_message_layout_simple() {
     let render = |text: String, text_options: TextOptions| {
         assert_eq!(
             text_options.font_size,
-            configuration.default_output_config.font_size.unwrap()
+            configuration
+                .default_output_config
+                .default_urgency
+                .font_size
+                .unwrap()
         );
         assert_eq!(
             text_options.text_color,
-            configuration.default_output_config.text_color.unwrap().0
+            configuration
+                .default_output_config
+                .default_urgency
+                .text_color
+                .unwrap()
+                .0
         );
 
         match text.as_str() {
@@ -834,7 +951,9 @@ fn test_message_layout_simple() {
         }
     };
 
-    output_config.get_message_layout(render);
+    output_config
+        .get_by_urgency("Normal")
+        .get_message_layout(render);
 
     assert!(app_name_called);
     assert!(summary_called);
@@ -845,7 +964,13 @@ fn test_message_layout_simple() {
 #[test]
 fn test_message_layout_customized() {
     let file_contents = r#"
-        message_layout = "<color=0xDEADBEEF font_size=13.5 this is a custom text>\n<font_size=18 summary>"
+message_layout = """
+<color=0xDEADBEEF font_size=13.5 this is a custom text>
+<font_size=18 summary>
+"""
+
+[urgency.Normal]
+font_size = 14
     "#
     .to_owned();
 
@@ -880,8 +1005,83 @@ fn test_message_layout_customized() {
         }
     };
 
-    output_config.get_message_layout(render);
+    output_config
+        .get_by_urgency("Normal")
+        .get_message_layout(render);
 
     assert!(summary_called);
     assert!(fragment_called);
+}
+
+macro_rules! format_color {
+    ($value:expr) => {
+        format!(
+            "0x{:02X}{:02X}{:02X}{:02X}",
+            $value.a(),
+            $value.r(),
+            $value.g(),
+            $value.b()
+        )
+    };
+}
+
+macro_rules! assert_eq_color {
+    ($got:expr,$expected:expr) => {
+        let got_str = format_color!($got);
+        let expected_str = format_color!($expected);
+
+        assert_eq!(
+            $got, $expected,
+            "Got: {} | Expected: {}",
+            got_str, expected_str
+        );
+    };
+}
+
+#[test]
+fn test_custom_urgency_levels() {
+    let file_contents = r#"
+        [outputs."eDP-1"]
+        border_size = 2
+        border_color = 0xFF444488
+
+        [outputs."eDP-1".urgency.Normal]
+        border_color = 0xFF6644BB
+
+        [outputs."eDP-1".urgency.Critical]
+        border_color = 0xFFFF6644
+    "#
+    .to_owned();
+
+    let configuration = Configuration::from_string(&file_contents);
+
+    if let Err(error) = configuration {
+        panic!("{}", error.to_string());
+    }
+
+    let configuration = configuration.unwrap();
+    let output_config = configuration.get_output_configuration("eDP-1");
+
+    println!("Urgencies: {:?}", output_config.urgencies.keys());
+
+    let low_urgency_config = output_config.get_by_urgency("Low");
+    assert_eq!(low_urgency_config.border_size, Some(2));
+    assert_eq_color!(
+        low_urgency_config.border_color.unwrap(),
+        Color::rgba(0x44, 0x44, 0x88, 0xFF)
+    );
+
+    let normal_urgency_config = output_config.get_by_urgency("Normal");
+    assert_eq!(normal_urgency_config.border_size, Some(2));
+    assert_eq_color!(
+        normal_urgency_config.border_color.unwrap(),
+        Color::rgba(0x66, 0x44, 0xBB, 0xFF)
+    );
+
+    let critical_urgency_config = output_config.get_by_urgency("Critical");
+    assert_eq!(critical_urgency_config.border_size, Some(2));
+    assert_eq_color!(
+        critical_urgency_config.border_color.unwrap(),
+        Color::rgba(0xFF, 0x66, 0x44, 0xFF)
+    );
 }
