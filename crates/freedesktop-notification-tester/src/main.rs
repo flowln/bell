@@ -50,6 +50,7 @@ struct ApplicationOptions {
     body_markup: bool,
     close_notification: bool,
     notification_sounds: bool,
+    urgency: bool,
 }
 
 impl Default for ApplicationOptions {
@@ -62,6 +63,7 @@ impl Default for ApplicationOptions {
             body_markup: false,
             close_notification: false,
             notification_sounds: false,
+            urgency: false,
         }
     }
 }
@@ -75,6 +77,7 @@ impl ApplicationOptions {
         self.body_markup = true;
         self.close_notification = true;
         self.notification_sounds = true;
+        self.urgency = true;
     }
 }
 
@@ -96,6 +99,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "--body-markup" => options.body_markup = true,
             "--close-notification" => options.close_notification = true,
             "--notification-sounds" => options.notification_sounds = true,
+            "--urgency" => options.urgency = true,
             "--help" => {
                 println!("freedesktop-notification-tester");
                 println!("");
@@ -110,7 +114,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "  --multiple-notifications: Test support for multiple notifications at once.",
                     "  --body-markup: Test support for markup in body messages (bold, italic, underline).",
                     "  --close-notification: Test support for closing a notification via DBus.",
-                    "  --notification-sounds: Test support for sound features (default, suppress, sound-file, sound-name)",
+                    "  --notification-sounds: Test support for sound features (default, suppress, sound-file, sound-name).",
+                    "  --urgency: Test support for the urgengy hint in notifications.",
                 ].join("\n"));
                 println!("  --help:      Show this help menu.");
                 println!("");
@@ -491,6 +496,90 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    if options.urgency {
+        run_test("urgency", || {
+            let mut hints = HashMap::new();
+            hints.insert(String::from("urgency"), as_variant!(0u8));
+
+            let _ = send_notification(
+                &mut proxy,
+                NotifyMessageInput {
+                    app_name: String::from("freedesktop-notification-tester"),
+                    replaces_id: 0,
+                    app_icon: String::new(),
+                    summary: String::from("urgency"),
+                    body: String::from(
+                        "This is a Low urgency notification.\nIt will expire in 4s.",
+                    ),
+                    actions: Vec::new(),
+                    hints: hints,
+                    expire_timeout: 4000,
+                },
+            );
+
+            let mut hints = HashMap::new();
+            hints.insert(String::from("urgency"), as_variant!(1u8));
+
+            let _ = send_notification(
+                &mut proxy,
+                NotifyMessageInput {
+                    app_name: String::from("freedesktop-notification-tester"),
+                    replaces_id: 0,
+                    app_icon: String::new(),
+                    summary: String::from("urgency"),
+                    body: String::from(
+                        "This is a Normal urgency notification.\nIt will expire in 4s.",
+                    ),
+                    actions: Vec::new(),
+                    hints: hints,
+                    expire_timeout: 4000,
+                },
+            );
+
+            let mut hints = HashMap::new();
+            hints.insert(String::from("urgency"), as_variant!(2u8));
+
+            let critical_opt = send_notification(
+                &mut proxy,
+                NotifyMessageInput {
+                    app_name: String::from("freedesktop-notification-tester"),
+                    replaces_id: 0,
+                    app_icon: String::new(),
+                    summary: String::from("urgency"),
+                    body: String::from(
+                        "This is a Critical urgency notification.\nIt should not expire on its own.\nDismiss it to continue.",
+                    ),
+                    actions: Vec::new(),
+                    hints: hints,
+                    expire_timeout: 4000,
+                },
+            );
+
+            println!("Sent all three notifications. Will check if the critical notification expires...");
+
+            let id = critical_opt.unwrap().id;
+            match wait_for_notification_close(&mut proxy, id, Duration::from_secs(5)) {
+                Ok(result) => {
+                    if result == 1 {
+                        println!("  A critical notification has expired, which should not happen.");
+                    } else {
+                        println!("  The notification has not expired, as was expected.");
+                    }
+
+                    let _ = wait_for_notification_close_with_action(&mut proxy, id, Duration::from_secs(5), |proxy| {
+                        println!("Sending close request for notification with id '{}'.", id);
+                        let _r: Result<CloseNotificationInputType, dbus::Error> =
+                            proxy.method_call(NOTIFICATION_BUS_INTERFACE_NAME, "CloseNotification", (id,));
+                    });
+                }
+                Err(error) => {
+                    eprintln!("Error while waiting for notification: {}", error);
+                }
+            }
+
+        });
+    }
+
     Ok(())
 }
 
@@ -517,7 +606,7 @@ fn send_notification(
     match r {
         Ok(response) => Some(NotifyMessageOutput::from(response)),
         Err(error) => {
-            eprintln!("Error sending notification: {}", error);
+            eprintln!("Error sending notification: {} {}", error.name()?, error.message()?);
             None
         }
     }
