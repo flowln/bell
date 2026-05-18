@@ -90,7 +90,7 @@ macro_rules! add_application_options {
             }
 
             pub fn parse_option(&mut self, option: &str) {
-                match option.replace("-", "_").as_str() {
+                match option[2..].replace("-", "_").as_str() {
                     $(
                         stringify!($name) => self.$name = true,
                     )+
