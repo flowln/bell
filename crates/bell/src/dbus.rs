@@ -55,7 +55,7 @@ macro_rules! create_dbus_wrapper {
 create_dbus_wrapper!(NotifyMessageInput NotifyMessageInputType DBUS_NOTIFY_PARAMETERS app_name:String replaces_id:u32 app_icon:String summary:String body:String actions:Vec<String> hints:PropMap expire_timeout:i32);
 create_dbus_wrapper!(ServerInfoMessageOutput ServerInfoMessageOutputType DBUS_SERVER_INFO_PARAMETERS name:String vendor:String version:String spec_version:String);
 
-const CAPABILITIES: [&'static str; 4] = ["body", "body-markup", "icon-static", "sound"];
+const CAPABILITIES: [&'static str; 5] = ["actions", "body", "body-markup", "icon-static", "sound"];
 
 pub const NOTIFICATION_BUS_INTERFACE_NAME: &'static str = "org.freedesktop.Notifications";
 pub const NOTIFICATION_BUS_OBJECT_PATH: &'static str = "/org/freedesktop/Notifications";
