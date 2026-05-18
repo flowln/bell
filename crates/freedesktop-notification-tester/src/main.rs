@@ -6,6 +6,25 @@ use std::time::Duration;
 mod types;
 use types::*;
 
+#[derive(Debug)]
+struct Error(String);
+
+impl From<dbus::Error> for Error {
+    fn from(err: dbus::Error) -> Self {
+        Error(format!(
+            "DBus error: name={} message={}",
+            err.name().unwrap_or_default(),
+            err.message().unwrap_or_default()
+        ))
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 macro_rules! test_method {
     ($proxy:ident $method_name:literal $out_struct:ty,$out_type:ty) => {
         let response_res: Result<$out_type, dbus::Error> =
@@ -144,12 +163,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         run_test("basic", || {
             test_method!(proxy "GetServerInformation" ServerInfoMessageOutput,ServerInfoMessageOutputType);
             test_method!(proxy "GetCapabilities" ServerCapsMessageOutput,ServerCapsMessageOutputType);
+
+            Ok(true)
         });
     }
 
     if options.basic_notification {
         run_test("basic-notification", || {
-            let output_opt = send_notification(
+            let output = send_notification(
                 &mut proxy,
                 NotifyMessageInput {
                     app_name: String::from("freedesktop-notification-tester"),
@@ -161,53 +182,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     hints: HashMap::new(),
                     expire_timeout: 0,
                 },
+            )?;
+
+            println!(
+                "  Successfully sent a notification, which acquire id '{}'.",
+                output.id
             );
 
-            if let Some(output) = output_opt {
-                println!(
-                    "  Successfully sent a notification, which acquire id '{}'.",
-                    output.id
-                );
+            let result =
+                wait_for_notification_close(&mut proxy, output.id, Duration::from_secs(20))?;
 
-                let result =
-                    wait_for_notification_close(&mut proxy, output.id, Duration::from_secs(20));
-
-                match &result {
-                    Ok(1) => println!("  The notification has expired (timed out)."),
-                    Ok(2) => println!("  The notification was dismissed by the user."),
-                    Ok(3) => println!("  The notification was closed by a DBus call."),
-                    Ok(u32::MAX) => {
-                        println!(
-                            "  Did not receive a 'NotificationClosed' signal after 20 seconds..."
-                        )
-                    }
-                    Ok(reason_id) => println!(
-                        "  The notification was closed via an unknown method (reason: {}).",
-                        reason_id
-                    ),
-                    Err(error) => {
-                        eprintln!(
-                            "  Failed to wait for a notification close signal: {}",
-                            error
-                        )
-                    }
+            match result {
+                1 => println!("  The notification has expired (timed out)."),
+                2 => println!("  The notification was dismissed by the user."),
+                3 => println!("  The notification was closed by a DBus call."),
+                u32::MAX => {
+                    println!(
+                        "  Did not receive a 'NotificationClosed' signal after 20 seconds..."
+                    )
                 }
+                reason_id => println!(
+                    "  The notification was closed via an unknown method (reason: {}).",
+                    reason_id
+                ),
+            }
 
-                match result {
-                    Ok(1) => println!(
+            match result {
+                1 => {
+                    println!(
                         "The 'NotificationClosed' signal is being properly sent by the server. However, the server did not properly handle 'expire_timeout' = 0 and expired the notification."
-                    ),
-                    Ok(2 | 3) => println!(
-                        "The 'NotificationClosed' signal is being properly sent by the server."
-                    ),
-                    _ => {
-                        println!(
-                            "It's possible that the server did not report a closed notification."
-                        )
-                    }
+                    );
+
+                    Ok(true)
                 }
-            } else {
-                println!("Failed to send a notification.");
+                2 | 3 => {
+                    println!(
+                        "The 'NotificationClosed' signal is being properly sent by the server."
+                    );
+
+                    Ok(true)
+                }
+                _ => {
+                    println!(
+                        "It's possible that the server did not report a closed notification."
+                    );
+
+                    Ok(false)
+                }
             }
         });
     }
@@ -217,7 +238,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut hints = HashMap::new();
             hints.insert(String::from("transient"), as_variant!(true));
 
-            let output_opt = send_notification(
+            let output = send_notification(
                 &mut proxy,
                 NotifyMessageInput {
                     app_name: String::from("freedesktop-notification-tester"),
@@ -229,37 +250,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     hints: hints,
                     expire_timeout: 2000,
                 },
+            )?;
+
+            println!(
+                "  Successfully sent a notification, which acquire id '{}'.",
+                output.id
             );
 
-            if let Some(output) = output_opt {
-                println!(
-                    "  Successfully sent a notification, which acquire id '{}'.",
-                    output.id
-                );
+            let result =
+                wait_for_notification_close(&mut proxy, output.id, Duration::from_secs(3))?;
 
-                let result =
-                    wait_for_notification_close(&mut proxy, output.id, Duration::from_secs(3));
-
-                match &result {
-                    Ok(1) => println!("  The notification has expired (timed out)."),
-                    Ok(_) => {
-                        println!(
-                            "  The notification did not close by timeout, as it was supposed to."
-                        )
-                    }
-                    Err(error) => {
-                        eprintln!(
-                            "  Failed to wait for a notification close signal: {}",
-                            error
-                        )
-                    }
+            match &result {
+                1 => println!("  The notification has expired (timed out)."),
+                _ => {
+                    println!(
+                        "  The notification did not close by timeout, as it was supposed to."
+                    )
                 }
+            }
 
-                if let Ok(1) = result {
-                    println!("The server has properly handled the 'expire_timeout' argument.");
-                }
+            if result == 1 {
+                println!("The server has properly handled the 'expire_timeout' argument.");
+
+                Ok(true)
             } else {
-                println!("Failed to send a notification.");
+                Ok(false)
             }
         });
     }
@@ -269,7 +284,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut hints = HashMap::new();
             hints.insert(String::from("transient"), as_variant!(true));
 
-            let output_1_opt = send_notification(
+            let output_1 = send_notification(
                 &mut proxy,
                 NotifyMessageInput {
                     app_name: String::from("freedesktop-notification-tester"),
@@ -283,12 +298,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     hints: hints,
                     expire_timeout: 2000,
                 },
-            );
+            )?;
 
             let mut hints = HashMap::new();
             hints.insert(String::from("transient"), as_variant!(true));
 
-            let output_2_opt = send_notification(
+            let output_2 = send_notification(
                 &mut proxy,
                 NotifyMessageInput {
                     app_name: String::from("freedesktop-notification-tester"),
@@ -302,12 +317,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     hints: hints,
                     expire_timeout: 3000,
                 },
-            );
+            )?;
 
             let mut hints = HashMap::new();
             hints.insert(String::from("transient"), as_variant!(true));
 
-            let output_3_opt = send_notification(
+            let output_3 = send_notification(
                 &mut proxy,
                 NotifyMessageInput {
                     app_name: String::from("freedesktop-notification-tester"),
@@ -321,23 +336,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     hints: hints,
                     expire_timeout: 4000,
                 },
-            );
+            )?;
 
-            let ids = [output_1_opt, output_2_opt, output_3_opt].map(|opt| opt.unwrap().id);
+            let mut status = true;
+
+            let ids = [output_1, output_2, output_3].map(|opt| opt.id);
             for (idx, id) in ids.into_iter().enumerate() {
-                let out_res = wait_for_notification_close(&mut proxy, id, Duration::from_secs(5));
-                if let Ok(1) = out_res {
+                let out = wait_for_notification_close(&mut proxy, id, Duration::from_secs(5))?;
+                if out == 1 {
                     println!("  Notification #{} has closed with success.", idx + 1);
                 } else {
                     println!("  Notification #{} failed to close with success.", idx + 1);
+                    status = false;
                 }
             }
+
+            Ok(status)
         });
     }
 
     if options.body_markup {
         run_test("body-markup", || {
-            let output_opt = send_notification(
+            let output = send_notification(
                 &mut proxy,
                 NotifyMessageInput {
                     app_name: String::from("freedesktop-notification-tester"),
@@ -351,15 +371,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     hints: HashMap::new(),
                     expire_timeout: 0,
                 },
-            );
+            )?;
 
-            if let Some(output) = output_opt {
-                let _ = wait_for_notification_close(&mut proxy, output.id, Duration::from_secs(20));
+            let _ = wait_for_notification_close(&mut proxy, output.id, Duration::from_secs(20));
 
-                println!("  Test ran successfully.");
-            } else {
-                eprintln!("Failed to send notification.");
-            }
+            Ok(true)
         });
     }
 
@@ -379,8 +395,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     hints: HashMap::new(),
                     expire_timeout: 0,
                 },
-            )
-            .expect("Failed to send notification");
+            )?;
 
             println!("Notification was sent, waiting two seconds before sending a close request.");
             std::thread::sleep(Duration::from_millis(2000));
@@ -398,9 +413,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         (id,),
                     );
                 },
-            ) {
-                Ok(3) => println!("  Notification was successfully closed by a DBus call."),
-                _ => println!("  Failed to close notification via DBus call. "),
+            )? {
+                3 => {
+                    println!("  Notification was successfully closed by a DBus call.");
+
+                    Ok(true)
+                }
+                _ => {
+                    println!("  Failed to close notification via DBus call. ");
+
+                    Ok(false)
+                }
             }
         });
     }
@@ -422,8 +445,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         hints: HashMap::new(),
                         expire_timeout: 1000,
                     },
-                )
-                .expect("Failed to send notification");
+                )?;
 
                 println!("Notification was sent, waiting a second before sending the next one.");
                 std::thread::sleep(Duration::from_millis(1000));
@@ -447,8 +469,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         hints: hints,
                         expire_timeout: 1000,
                     },
-                )
-                .expect("Failed to send notification");
+                )?;
 
                 println!("Notification was sent, waiting a second before sending the next one.");
                 std::thread::sleep(Duration::from_millis(1000));
@@ -475,8 +496,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         hints: hints,
                         expire_timeout: 2000,
                     },
-                )
-                .expect("Failed to send notification");
+                )?;
 
                 println!("Notification was sent, waiting two seconds before sending the next one.");
                 std::thread::sleep(Duration::from_millis(2000));
@@ -501,12 +521,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         hints: hints,
                         expire_timeout: 2000,
                     },
-                )
-                .expect("Failed to send notification");
+                )?;
 
                 println!("Notification was sent, waiting two seconds before ending the test.");
                 std::thread::sleep(Duration::from_millis(2000));
             }
+
+            Ok(true)
         });
     }
 
@@ -529,7 +550,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     hints: hints,
                     expire_timeout: 4000,
                 },
-            );
+            )?;
 
             let mut hints = HashMap::new();
             hints.insert(String::from("urgency"), as_variant!(1u8));
@@ -548,12 +569,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     hints: hints,
                     expire_timeout: 4000,
                 },
-            );
+            )?;
 
             let mut hints = HashMap::new();
             hints.insert(String::from("urgency"), as_variant!(2u8));
 
-            let critical_opt = send_notification(
+            let critical = send_notification(
                 &mut proxy,
                 NotifyMessageInput {
                     app_name: String::from("freedesktop-notification-tester"),
@@ -567,40 +588,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     hints: hints,
                     expire_timeout: 4000,
                 },
-            );
+            )?;
 
             println!(
                 "Sent all three notifications. Will check if the critical notification expires..."
             );
 
-            let id = critical_opt.unwrap().id;
-            match wait_for_notification_close(&mut proxy, id, Duration::from_secs(5)) {
-                Ok(result) => {
-                    if result == 1 {
-                        println!("  A critical notification has expired, which should not happen.");
-                    } else {
-                        println!("  The notification has not expired, as was expected.");
-                    }
+            let id = critical.id;
+            let result = wait_for_notification_close(&mut proxy, id, Duration::from_secs(5))?;
+            if result == 1 {
+                println!("  A critical notification has expired, which should not happen.");
 
-                    let _ = wait_for_notification_close_with_action(
-                        &mut proxy,
-                        id,
-                        Duration::from_secs(5),
-                        |proxy| {
-                            println!("Sending close request for notification with id '{}'.", id);
-                            let _r: Result<CloseNotificationInputType, dbus::Error> = proxy
-                                .method_call(
-                                    NOTIFICATION_BUS_INTERFACE_NAME,
-                                    "CloseNotification",
-                                    (id,),
-                                );
-                        },
-                    );
-                }
-                Err(error) => {
-                    eprintln!("Error while waiting for notification: {}", error);
-                }
+                return Ok(false);
+            } else {
+                println!("  The notification has not expired, as was expected.");
             }
+
+            let _ = wait_for_notification_close_with_action(
+                &mut proxy,
+                id,
+                Duration::from_secs(5),
+                |proxy| {
+                    println!("Sending close request for notification with id '{}'.", id);
+                    let _r: Result<CloseNotificationInputType, dbus::Error> = proxy
+                        .method_call(
+                            NOTIFICATION_BUS_INTERFACE_NAME,
+                            "CloseNotification",
+                            (id,),
+                        );
+                },
+            )?;
+
+            Ok(true)
         });
     }
 
@@ -609,11 +628,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn run_test<F>(test_name: &str, mut test_function: F)
 where
-    F: FnMut() -> (),
+    F: FnMut() -> Result<bool, Error>,
 {
     println!("\n=== Running '{}' tests... ===\n", test_name);
 
-    test_function();
+    match test_function() {
+        Ok(true) => println!("+++ Test '{}' succeeded.", test_name),
+        Ok(false) => println!("--- Test '{}' failed.", test_name),
+        Err(error) => eprintln!("!!! Test '{}' failed with an error: {}", test_name, error.0),
+    }
 
     std::thread::sleep(Duration::from_millis(200));
 }
@@ -621,22 +644,15 @@ where
 fn send_notification(
     proxy: &mut dbus::blocking::Proxy<'_, &Connection>,
     parameters: NotifyMessageInput,
-) -> Option<NotifyMessageOutput> {
+) -> Result<NotifyMessageOutput, Error> {
     let r: Result<NotifyMessageOutputType, dbus::Error> = proxy.method_call(
         NOTIFICATION_BUS_INTERFACE_NAME,
         "Notify",
         NotifyMessageInputType::from(parameters),
     );
     match r {
-        Ok(response) => Some(NotifyMessageOutput::from(response)),
-        Err(error) => {
-            eprintln!(
-                "Error sending notification: {} {}",
-                error.name()?,
-                error.message()?
-            );
-            None
-        }
+        Ok(response) => Ok(NotifyMessageOutput::from(response)),
+        Err(error) => Err(Error::from(error)),
     }
 }
 
@@ -644,7 +660,7 @@ fn wait_for_notification_close(
     proxy: &mut dbus::blocking::Proxy<'_, &Connection>,
     notification_id: u32,
     max_time_to_wait: Duration,
-) -> Result<u32, dbus::Error> {
+) -> Result<u32, Error> {
     wait_for_notification_close_with_action(proxy, notification_id, max_time_to_wait, |_| {})
 }
 
@@ -653,7 +669,7 @@ fn wait_for_notification_close_with_action<F>(
     notification_id: u32,
     max_time_to_wait: Duration,
     mut pre_action: F,
-) -> Result<u32, dbus::Error>
+) -> Result<u32, Error>
 where
     F: FnMut(&mut dbus::blocking::Proxy<'_, &Connection>) -> (),
 {
