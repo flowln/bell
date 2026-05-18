@@ -96,3 +96,5 @@ create_dbus_wrapper!(pub CloseNotificationInput CloseNotificationInputType id:u3
 
 create_dbus_signal_wrapper!(pub NotificationClosedSignal "NotificationClosed" id:u32 reason:u32);
 
+// https://specifications.freedesktop.org/notification/latest/icons-and-images.html#icons-and-images-formats
+create_struct_tuple_pair!(pub ImageData ImageDataTuple width:i32 height:i32 rowstride:i32 has_alpha:bool bits_per_sample:i32 channels:i32 data:Vec<u8>);

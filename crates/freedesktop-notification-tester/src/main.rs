@@ -3,6 +3,9 @@ use dbus::blocking::Connection;
 use std::collections::HashMap;
 use std::time::Duration;
 
+mod images;
+use images::*;
+
 mod types;
 use types::*;
 
@@ -110,6 +113,7 @@ add_application_options!(
     close_notification:false
     notification_sounds:false
     urgency:false
+    image_data:false
 );
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -138,6 +142,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "  --close-notification: Test support for closing a notification via DBus.",
                     "  --notification-sounds: Test support for sound features (default, suppress, sound-file, sound-name).",
                     "  --urgency: Test support for the urgengy hint in notifications.",
+                    "  --image-data: Test support for the 'image-data' hint.",
                 ].join("\n"));
                 println!("  --help:      Show this help menu.");
                 println!("");
@@ -197,9 +202,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 2 => println!("  The notification was dismissed by the user."),
                 3 => println!("  The notification was closed by a DBus call."),
                 u32::MAX => {
-                    println!(
-                        "  Did not receive a 'NotificationClosed' signal after 20 seconds..."
-                    )
+                    println!("  Did not receive a 'NotificationClosed' signal after 20 seconds...")
                 }
                 reason_id => println!(
                     "  The notification was closed via an unknown method (reason: {}).",
@@ -223,9 +226,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Ok(true)
                 }
                 _ => {
-                    println!(
-                        "It's possible that the server did not report a closed notification."
-                    );
+                    println!("It's possible that the server did not report a closed notification.");
 
                     Ok(false)
                 }
@@ -263,9 +264,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             match &result {
                 1 => println!("  The notification has expired (timed out)."),
                 _ => {
-                    println!(
-                        "  The notification did not close by timeout, as it was supposed to."
-                    )
+                    println!("  The notification did not close by timeout, as it was supposed to.")
                 }
             }
 
@@ -515,7 +514,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         app_icon: String::new(),
                         summary: String::from("notification-sounds"),
                         body: format!(
-                            "This notification should play a test sound too (using sound-name):\n{}", sound_name,
+                            "This notification should play a test sound too (using sound-name):\n{}",
+                            sound_name,
                         ),
                         actions: Vec::new(),
                         hints: hints,
@@ -610,14 +610,61 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Duration::from_secs(5),
                 |proxy| {
                     println!("Sending close request for notification with id '{}'.", id);
-                    let _r: Result<CloseNotificationInputType, dbus::Error> = proxy
-                        .method_call(
-                            NOTIFICATION_BUS_INTERFACE_NAME,
-                            "CloseNotification",
-                            (id,),
-                        );
+                    let _r: Result<CloseNotificationInputType, dbus::Error> = proxy.method_call(
+                        NOTIFICATION_BUS_INTERFACE_NAME,
+                        "CloseNotification",
+                        (id,),
+                    );
                 },
             )?;
+
+            Ok(true)
+        });
+    }
+
+    if options.image_data {
+        run_test("image_data", || {
+            let mut hints = HashMap::new();
+            hints.insert(String::from("image-data"), create_16x16_image_data());
+
+            let output = send_notification(
+                &mut proxy,
+                NotifyMessageInput {
+                    app_name: String::from("freedesktop-notification-tester"),
+                    replaces_id: 0,
+                    app_icon: String::new(),
+                    summary: String::from("image-data"),
+                    body: String::from(
+                        "This is a notification with a 16x16 image, fully opaque.\nIt will expire in 4s.",
+                    ),
+                    actions: Vec::new(),
+                    hints: hints,
+                    expire_timeout: 4000,
+                },
+            )?;
+
+            wait_for_notification_close(&mut proxy, output.id, Duration::from_secs(5))?;
+
+            let mut hints = HashMap::new();
+            hints.insert(String::from("image-data"), create_24x24_image_data());
+
+            let output = send_notification(
+                &mut proxy,
+                NotifyMessageInput {
+                    app_name: String::from("freedesktop-notification-tester"),
+                    replaces_id: 0,
+                    app_icon: String::new(),
+                    summary: String::from("image-data"),
+                    body: String::from(
+                        "This is a notification with a 24x24 image, half translucent.\nIt will expire in 4s.",
+                    ),
+                    actions: Vec::new(),
+                    hints: hints,
+                    expire_timeout: 4000,
+                },
+            )?;
+
+            wait_for_notification_close(&mut proxy, output.id, Duration::from_secs(5))?;
 
             Ok(true)
         });
