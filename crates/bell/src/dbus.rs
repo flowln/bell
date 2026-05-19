@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -177,6 +178,23 @@ pub fn emit_notification_closed(
     connection.channel().send(message)
 }
 
+pub fn emit_action_invoked(
+    connection: &mut Connection,
+    id: u32,
+    action_key: String,
+) -> Result<u32, ()> {
+    let mut message = Message::new_signal(
+        NOTIFICATION_BUS_OBJECT_PATH,
+        NOTIFICATION_BUS_INTERFACE_NAME,
+        "ActionInvoked",
+    )
+    .unwrap();
+
+    message.append_all((id, action_key));
+
+    connection.channel().send(message)
+}
+
 // Ref.: https://specifications.freedesktop.org/notification/latest/protocol.html#id-1.10.3.3.4
 fn handle_notify_message(
     _ctx: &mut Context,
@@ -185,7 +203,20 @@ fn handle_notify_message(
 ) -> Result<u32, MethodErr> {
     let input = NotifyMessageInput::from(input);
 
-    let mut notification = Notification::new(input.app_name, input.summary, input.body);
+    // Actions are sent over as a list of pairs.
+    // Each even element in the list (starting at index 0) represents the identifier for the action.
+    // Each odd element in the list is the localized string that will be displayed to the user. 
+    let mut actions = BTreeMap::new();
+    for [action_key, display_name] in input.actions.as_chunks::<2>().0 {
+        actions.insert(action_key.clone(), display_name.clone());
+    }
+
+    // The default action (usually invoked by clicking the notification) should have a key named "default"
+    if actions.len() == 0 {
+        actions.insert(String::from("default"), String::from("Default action"));
+    }
+
+    let mut notification = Notification::new(input.app_name, input.summary, input.body, actions);
 
     // The optional program icon of the calling application.
     // Can be an empty string, indicating no icon.
@@ -201,6 +232,17 @@ fn handle_notify_message(
     } else if let Some(icon_data) = input.hints.get("icon_data") {
         notification.image_data = parse_image_data_struct(&icon_data.0);
     }
+
+    // When set the server will not automatically remove the notification when an action has been invoked.
+    let is_resident = {
+        if let Some(resident_hint) = input.hints.get("resident") {
+            *resident_hint.0.as_any().downcast_ref::<bool>().unwrap_or(&false)
+        } else {
+            false
+        }
+    };
+
+    notification.resident = is_resident;
 
     // The timeout time in milliseconds since the display of the notification at which
     // the notification should automatically close.

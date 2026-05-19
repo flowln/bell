@@ -435,6 +435,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .unwrap();
                 }
                 notifications.clear();
+
+                let invoked_actions = {
+                    let mut manager = notification_manager_write(None);
+                    manager.get_action_invokations()
+                };
+
+                for (id, action_key) in invoked_actions {
+                    _dbus::emit_action_invoked(&mut dbus_connection, id, action_key).unwrap();
+                }
             }
         }
     });
@@ -473,7 +482,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if trigger_queue.len() != 0 {
                 let mut notification_manager = notification_manager_write(None);
-                notification_manager.add_event_triggers(trigger_queue);
+                notification_manager.set_event_triggers(trigger_queue);
             }
         }
 

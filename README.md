@@ -97,7 +97,10 @@ default_sound = "/usr/share/sounds/freedesktop/stereo/message.oga"
 #   play-sound: Play a sound, either specified in the notification or configured with the 'default_sound' option.
 #     This is different from 'exec' in that it respects the 'suppress-sound', 'sound-file' and 'sound-name' hints in notification that have them.
 #     The argument to it is the command-line utility to play the sound. It must support a file path being passed as a positional argument.
+#   invoke-action: Invoke the default or first action when the notification has them.
+#     This is a WIP feature, so there's currently no option to select which action to invoke.
 [events]
+left-click = "invoke-action"
 right-click = "close-notification"
 on-notification-received = { play-sound = "mpv" }
 

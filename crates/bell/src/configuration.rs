@@ -299,6 +299,8 @@ pub enum EventResponse {
     ExecuteCommand(String),
     #[serde(rename = "play-sound")]
     PlaySound(String),
+    #[serde(rename = "invoke-action")]
+    InvokeAction,
     #[serde(rename = "nothing")]
     Nothing,
 }

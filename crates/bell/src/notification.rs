@@ -51,6 +51,10 @@ pub struct Notification {
 
     pub is_dirty: bool,
 
+    actions: BTreeMap<String, String>,
+    pub resident: bool,
+    pub(crate) invoked_action: Option<String>,
+
     creation_time: time::Instant,
     expire_timeout: Option<time::Duration>,
     expire_timeout_thread_handle: Option<std::thread::JoinHandle<()>>,
@@ -59,8 +63,28 @@ pub struct Notification {
     surface_ids: Vec<SurfaceID>,
 }
 
+impl PartialEq for Notification {
+    fn eq(&self, other: &Notification) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for Notification {}
+
+use std::hash::{Hash, Hasher};
+impl Hash for Notification {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
+
 impl Notification {
-    pub fn new(app_name: String, summary: String, body: String) -> Notification {
+    pub fn new(
+        app_name: String,
+        summary: String,
+        body: String,
+        actions: BTreeMap<String, String>,
+    ) -> Notification {
         Notification {
             id: None,
             app_name,
@@ -71,6 +95,9 @@ impl Notification {
             image_data: None,
             sound_file: None,
             is_dirty: true,
+            actions,
+            resident: false,
+            invoked_action: None,
             creation_time: time::Instant::now(),
             expire_timeout: None,
             expire_timeout_thread_handle: None,
@@ -176,6 +203,22 @@ impl Notification {
                         }
                     }
                     None => return true,
+                }
+            }
+            EventResponse::InvokeAction => {
+                if self.id.is_none() {
+                    eprintln!(
+                        "Attempted to invoke action when notification doesn't have a valid ID."
+                    );
+                    return false;
+                }
+
+                // TODO: Handle more than one action.
+                let invoked_action = self.actions.keys().next().unwrap();
+                self.invoked_action = Some(invoked_action.clone());
+
+                if !self.resident {
+                    self.expire();
                 }
             }
             _ => {
@@ -415,7 +458,7 @@ impl NotificationManager {
         *self.event_handler = event_handler;
     }
 
-    pub fn add_event_triggers(&mut self, triggers: &mut HashMap<SurfaceID, Vec<EventTrigger>>) {
+    pub fn set_event_triggers(&mut self, triggers: &mut HashMap<SurfaceID, Vec<EventTrigger>>) {
         for (surface_id, event_triggers) in triggers.drain() {
             for (notification_id, notification) in self.active_notifications.iter() {
                 if !notification.has_surface(&surface_id) {
@@ -429,12 +472,24 @@ impl NotificationManager {
                         .extend(event_triggers);
                 } else {
                     self.event_triggers_to_process
-                        .insert(notification_id.clone(), event_triggers);
+                        .insert(*notification_id, event_triggers);
                 }
 
                 break;
             }
         }
+    }
+
+    pub fn get_action_invokations(&mut self) -> Vec<(u32, String)> {
+        let mut res = Vec::new();
+
+        for (id, notification) in self.active_notifications.iter_mut() {
+            if let Some(action) = notification.invoked_action.take() {
+                res.push((*id, action));
+            }
+        }
+
+        res
     }
 
     pub fn process_active_notifications<F>(
