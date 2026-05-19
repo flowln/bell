@@ -6,29 +6,25 @@ macro_rules! with_scale {
     ( $self:expr,$( $x:expr ),+ ) => { ($( ($x as usize) * $self.buffer_scale, )+ )};
 }
 
-fn blend_colors(first_color: Color, second_color: Color) -> Color {
-    let a_first = f32::from(first_color.a());
-    let a_second = f32::from(second_color.a());
+fn blend_colors(background_color: Color, foreground_color: Color) -> Color {
+    let a_foreground = f32::from(foreground_color.a());
 
-    let first_frac = a_first / (a_first + a_second);
-    let second_frac = a_second / (a_first + a_second);
+    let foreground_frac = a_foreground / f32::from(0xFF_u8);
+    let background_frac = 1. - foreground_frac;
 
     let r = unsafe {
-        (first_frac * f32::from(first_color.r()) + second_frac * f32::from(second_color.r()))
+        (background_frac * f32::from(background_color.r()) + foreground_frac * f32::from(foreground_color.r()))
             .to_int_unchecked::<u32>()
     };
     let g = unsafe {
-        (first_frac * f32::from(first_color.g()) + second_frac * f32::from(second_color.g()))
+        (background_frac * f32::from(background_color.g()) + foreground_frac * f32::from(foreground_color.g()))
             .to_int_unchecked::<u32>()
     };
     let b = unsafe {
-        (first_frac * f32::from(first_color.b()) + second_frac * f32::from(second_color.b()))
+        (background_frac * f32::from(background_color.b()) + foreground_frac * f32::from(foreground_color.b()))
             .to_int_unchecked::<u32>()
     };
-    let a = unsafe {
-        (first_frac * f32::from(first_color.a()) + second_frac * f32::from(second_color.a()))
-            .to_int_unchecked::<u32>()
-    };
+    let a = background_color.a().max(foreground_color.a()) as u32;
 
     let color_bits = ((a << 24) & 0xFF000000)
         + ((r << 16) & 0x00FF0000)
@@ -158,14 +154,12 @@ pub mod render {
                         0xFF
                     };
 
-                    let color = Color::rgba(r, g, b, a);
-
                     self.draw_point_with_scale(
                         x_point,
                         y_point,
                         Some(width_scale),
                         Some(height_scale),
-                        color,
+                        Color::rgba(r, g, b, a),
                     );
                 }
             }
@@ -523,7 +517,7 @@ pub mod render {
             height_original: usize,
             width_scale: Option<f32>,
             height_scale: Option<f32>,
-            mut color: Color,
+            color: Color,
             blend_with_previous_color: bool,
         ) {
             let width_scale = width_scale.unwrap_or(1.0);
@@ -535,18 +529,25 @@ pub mod render {
             let y_start = self.buffer_scale * y_original;
             let y_end = self.buffer_scale
                 * y_original.saturating_add(scale_end(height_scale, height_original));
+
+            let x_start = self.buffer_scale * x_original;
+            let x_end = self.buffer_scale
+                * x_original.saturating_add(scale_end(width_scale, width_original));
+
             for y in y_start..y_end {
-                let x_start = self.buffer_scale * x_original;
-                let x_end = self.buffer_scale
-                    * x_original.saturating_add(scale_end(width_scale, width_original));
                 for x in x_start..x_end {
                     let offset = y * self.backing_store_stride + x;
-                    if blend_with_previous_color && color.a() != 0xFF {
-                        color = blend_colors(Color(self.backing_store[offset]), color)
-                    }
+
+                    let final_color = {
+                        if blend_with_previous_color && color.a() != 0xFF {
+                            blend_colors(Color(self.backing_store[offset]), color)
+                        } else {
+                            color
+                        }
+                    };
 
                     assert!(offset < self.backing_store.len());
-                    self.backing_store[offset] = color.0;
+                    self.backing_store[offset] = final_color.0;
                 }
             }
         }

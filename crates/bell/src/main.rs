@@ -100,7 +100,15 @@ fn render_notification(
             renderer.height - icon_size - 2 * padding_y,
         );
 
-        let effective_size = remaining_size.min(64);
+        let image_best_size =  {
+            if image_data.width <= 64 {
+                image_data.width * 64i32.div_euclid(image_data.width)
+            } else {
+                64 - image_data.width.rem_euclid(64)
+            }
+        } as usize;
+
+        let effective_size = remaining_size.min(image_best_size);
         let (width, height) = (effective_size, effective_size);
 
         let x_position = 0i32 - padding_x as i32 - width as i32;
