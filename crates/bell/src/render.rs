@@ -1,4 +1,4 @@
-pub use cosmic_text::{Attrs, Color, Metrics, Style, UnderlineStyle, Weight};
+pub use cosmic_text::{Attrs, Color, Metrics};
 
 #[macro_export]
 macro_rules! with_scale {

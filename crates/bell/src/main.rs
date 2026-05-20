@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
@@ -25,7 +24,8 @@ use render::{Attrs, Color, Metrics};
 
 use configuration::{GrowthDirection, OutputConfiguration};
 use notification::{
-    ImageSource, Notification, SurfaceProcessingOutput, notification_manager_read, notification_manager_write,
+    ImageSource, Notification, SurfaceProcessingOutput, notification_manager_read,
+    notification_manager_write,
 };
 
 static EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -57,9 +57,10 @@ fn render_notification(
         padding_y += border_size;
     }
 
-    let mut icon_size = 0;
+    let mut icon_size_x = 0;
+    let mut icon_size_y = 0;
     if let Some(app_icon) = &notification.app_icon {
-        let preferred_icon_size = icon::IconSize { size: 32, scale: 1 };
+        let preferred_icon_size = icon::IconSize { size: 16, scale: 1 };
         match retrieve_app_icon(
             app_icon.as_str(),
             urgency_spec.icon_theme.as_deref(),
@@ -77,33 +78,42 @@ fn render_notification(
 
                 match icon_information.file_type {
                     icon::IconFileType::PNG => {
-                        if let Err(error) =
-                            renderer.draw_png(x_position, y_position, size, size, &icon_information.path)
-                        {
+                        if let Err(error) = renderer.draw_png(
+                            x_position,
+                            y_position,
+                            size,
+                            size,
+                            &icon_information.path,
+                        ) {
                             eprintln!("Error drawing PNG icon at '{}': {}", app_icon, error);
                         }
+
+                        icon_size_x = size + padding_x;
+                        icon_size_y = size + padding_y;
                     }
                     _ => {}
                 }
-
-                icon_size = size;
             }
             Err(error) => {
-                eprintln!("Failed to retrieve information for icon '{}': {}", app_icon, error);
+                eprintln!(
+                    "Failed to retrieve information for icon '{}': {}",
+                    app_icon, error
+                );
             }
         }
     }
 
-    let mut image_size = 0;
+    let mut image_size_x = 0;
+    let mut _image_size_y = 0;
     if let Some(image_data) = notification.image_data.as_ref() {
         let remaining_size = usize::min(
             renderer.width - 2 * padding_x,
-            renderer.height - icon_size - 2 * padding_y,
+            renderer.height - icon_size_y - 2 * padding_y,
         );
 
         match image_data {
             ImageSource::Data(data) => {
-                let image_best_size =  {
+                let image_best_size = {
                     if data.width <= 64 {
                         data.width * 64i32.div_euclid(data.width)
                     } else {
@@ -119,7 +129,8 @@ fn render_notification(
 
                 renderer.draw_image(x_position, y_position, width, height, data);
 
-                image_size = effective_size;
+                image_size_x = width + padding_x;
+                _image_size_y = height + padding_y;
             }
             ImageSource::Path(path) => {
                 let effective_size = remaining_size.min(64);
@@ -145,7 +156,6 @@ fn render_notification(
                 }
             }
         }
-
     }
 
     use cosmic_text::Family;
@@ -211,7 +221,7 @@ fn render_notification(
         }
     });
 
-    let remaining_width = renderer.width - 2 * padding_x - image_size.max(icon_size);
+    let remaining_width = renderer.width - 2 * padding_x - image_size_x.max(icon_size_x);
     let remaining_height = renderer.height - 2 * padding_y;
     renderer.draw_text_spans(
         text_span,
