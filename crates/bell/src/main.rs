@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
@@ -24,7 +25,7 @@ use render::{Attrs, Color, Metrics};
 
 use configuration::{GrowthDirection, OutputConfiguration};
 use notification::{
-    Notification, SurfaceProcessingOutput, notification_manager_read, notification_manager_write,
+    ImageSource, Notification, SurfaceProcessingOutput, notification_manager_read, notification_manager_write,
 };
 
 static EXIT_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -100,23 +101,51 @@ fn render_notification(
             renderer.height - icon_size - 2 * padding_y,
         );
 
-        let image_best_size =  {
-            if image_data.width <= 64 {
-                image_data.width * 64i32.div_euclid(image_data.width)
-            } else {
-                64 - image_data.width.rem_euclid(64)
+        match image_data {
+            ImageSource::Data(data) => {
+                let image_best_size =  {
+                    if data.width <= 64 {
+                        data.width * 64i32.div_euclid(data.width)
+                    } else {
+                        64 - data.width.rem_euclid(64)
+                    }
+                } as usize;
+
+                let effective_size = remaining_size.min(image_best_size);
+                let (width, height) = (effective_size, effective_size);
+
+                let x_position = 0i32 - padding_x as i32 - width as i32;
+                let y_position = 0i32 - padding_y as i32 - height as i32;
+
+                renderer.draw_image(x_position, y_position, width, height, data);
+
+                image_size = effective_size;
             }
-        } as usize;
+            ImageSource::Path(path) => {
+                let effective_size = remaining_size.min(64);
+                let (width, height) = (effective_size, effective_size);
 
-        let effective_size = remaining_size.min(image_best_size);
-        let (width, height) = (effective_size, effective_size);
+                let x_position = 0i32 - padding_x as i32 - width as i32;
+                let y_position = 0i32 - padding_y as i32 - height as i32;
 
-        let x_position = 0i32 - padding_x as i32 - width as i32;
-        let y_position = 0i32 - padding_y as i32 - height as i32;
+                let file_extension = path.extension().map(|s| s.to_str().unwrap_or(""));
 
-        renderer.draw_image(x_position, y_position, width, height, image_data);
+                match file_extension {
+                    Some("png" | "apng") => {
+                        if let Err(error) =
+                            renderer.draw_png(x_position, y_position, width, height, &path)
+                        {
+                            eprintln!("Error drawing PNG icon: {}", error);
+                        }
+                    }
+                    Some(ext) => {
+                        eprintln!("Unsupported image type: {}", ext);
+                    }
+                    _ => {}
+                }
+            }
+        }
 
-        image_size = effective_size;
     }
 
     use cosmic_text::Family;

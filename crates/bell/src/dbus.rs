@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::str::FromStr;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
@@ -9,7 +10,7 @@ use dbus::blocking::Connection;
 use dbus_crossroads::{Context, Crossroads, MethodErr};
 
 use crate::notification::{
-    Notification, NotificationCloseReason, NotificationError, notification_manager_write,
+    ImageSource, Notification, NotificationCloseReason, NotificationError, notification_manager_write,
 };
 
 macro_rules! create_struct_tuple_pair {
@@ -225,12 +226,28 @@ fn handle_notify_message(
     }
 
     if let Some(image_data) = input.hints.get("image-data") {
-        notification.image_data = parse_image_data_struct(&image_data.0);
+        if let Some(data) = parse_image_data_struct(&image_data.0) {
+            notification.image_data = Some(ImageSource::Data(data));
+        } else {
+            eprintln!("Failed to parse 'image-data' hint.");
+        }
     } else if let Some(image_path) = input.hints.get("image-path") {
-        let image_path = image_path.as_str().unwrap_or("unknown image path");
-        eprintln!("Received an 'image-path' = '{}', which is not yet implemented.", image_path);
+        if let Some(path) = image_path.as_str() {
+            match std::path::PathBuf::from_str(path) {
+                Ok(path_buf) => notification.image_data = Some(ImageSource::Path(path_buf)),
+                Err(_) => {
+                    eprintln!("Parsing 'image-path' as an icon name in a theme is not yet supported.");
+                }
+            }
+        } else {
+            eprintln!("Failed to parse 'image-path' hint: {:?}", image_path);
+        }
     } else if let Some(icon_data) = input.hints.get("icon_data") {
-        notification.image_data = parse_image_data_struct(&icon_data.0);
+        if let Some(data) = parse_image_data_struct(&icon_data.0) {
+            notification.image_data = Some(ImageSource::Data(data));
+        } else {
+            eprintln!("Failed to parse 'icon_data' hint.");
+        }
     }
 
     // When set the server will not automatically remove the notification when an action has been invoked.

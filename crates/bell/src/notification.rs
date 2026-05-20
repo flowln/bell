@@ -37,6 +37,11 @@ impl ToString for NotificationUrgency {
     }
 }
 
+pub enum ImageSource {
+    Data(ImageData),
+    Path(std::path::PathBuf),
+}
+
 pub struct Notification {
     pub id: Option<u32>,
     pub app_name: String,
@@ -45,7 +50,7 @@ pub struct Notification {
     pub urgency: NotificationUrgency,
 
     pub app_icon: Option<String>,
-    pub image_data: Option<ImageData>,
+    pub image_data: Option<ImageSource>,
 
     pub sound_file: Option<String>,
 
