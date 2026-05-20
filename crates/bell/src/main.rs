@@ -80,7 +80,7 @@ fn render_notification(
                         if let Err(error) =
                             renderer.draw_png(x_position, y_position, size, size, &icon_information.path)
                         {
-                            eprintln!("Error drawing PNG icon: {}", error);
+                            eprintln!("Error drawing PNG icon at '{}': {}", app_icon, error);
                         }
                     }
                     _ => {}

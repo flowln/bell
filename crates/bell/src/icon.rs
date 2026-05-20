@@ -106,17 +106,16 @@ pub fn retrieve_app_icon(
 ) -> Result<IconFileInformation, IOError> {
     if app_icon.starts_with("file://") {
         // URI (file:// is the only URI schema supported right now)
+        let path = PathBuf::from_str(app_icon.strip_prefix("file://").unwrap())
+            .map_err(|_| IOError::from(IOErrorKind::InvalidInput))?;
+
         let (_, file_extension) = app_icon
             .rsplit_once('.')
             .ok_or(IOError::from(IOErrorKind::InvalidInput))?;
         let file_type = IconFileType::try_from_extension(file_extension)
             .ok_or(IOError::from(IOErrorKind::Unsupported))?;
 
-        return Ok(IconFileInformation::new(
-            std::path::PathBuf::from_str(&app_icon).unwrap(),
-            file_type,
-            None,
-        ));
+        return Ok(IconFileInformation::new(path, file_type, None));
     }
 
     // A name in a freedesktop.org-compliant icon theme.
