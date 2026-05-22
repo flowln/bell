@@ -183,6 +183,11 @@ This project relies on the [`wlr-layer-shell-unstable-v1`](https://wayland.app/p
 
 A list of compositors supporting this protocol can be found [here](https://wayland.app/protocols/wlr-layer-shell-unstable-v1#compositor-support).
 
+Furthermore, the following protocols are also used when available in order to provide additional functionality:
+
+- `wp_cursor_shape_manager_v1` - Cursor format manipulation when hovering notifications.
+- `ext_idle_notifier_v1` - Idle status monitoring for notification persistence.
+
 ## References
 
 This project was heavily inspired by [mako](https://github.com/emersion/mako), an amazing notification daemon for Wayland systems.
