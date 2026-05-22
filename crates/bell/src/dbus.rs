@@ -358,26 +358,21 @@ fn handle_notify_message(
         notification.sound_file = sound_file;
     }
 
-    notification
-        .try_make_surfaces(configuration)
-        .ok_or(MethodErr::failed(
-            "Failed creating Wayland notification surfaces.",
-        ))?;
-
     // The optional notification ID that this notification replaces.
     // The server must atomically (ie with no flicker or other visual cues) replace
     // the given notification with this one.
     let mut id = input.replaces_id;
+
+    if let Some(timeout) = expire_timeout {
+        notification_manager.set_timeout_for_notification(&id, timeout);
+    }
+
     if id == 0 {
         // If replaces_id is 0, the return value is a UINT32 that represent the notification.
         id = notification_manager.add_notification(notification);
     } else {
         // If replaces_id is not 0, the returned value is the same value as replaces_id.
         notification_manager.replace_notification(id, notification);
-    }
-
-    if let Some(timeout) = expire_timeout {
-        notification_manager.set_timeout_for_notification(&id, timeout);
     }
 
     Ok(id)

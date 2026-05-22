@@ -424,6 +424,10 @@ impl NotificationManager {
 
         notification.id = Some(self.biggest_id_given);
 
+        notification
+            .try_make_surfaces(self.get_configuration().unwrap())
+            .expect("Failed creating Wayland notification surfaces.");
+
         self.active_notifications
             .insert(self.biggest_id_given, notification);
 
