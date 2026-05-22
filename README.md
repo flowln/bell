@@ -2,6 +2,8 @@
 
 Lightweight notification application for Wayland systems.
 
+![example image showing the application running and showing multiple notifications](./sample_image.png)
+
 ## Table of contents
 
 - [bell](#bell)
@@ -70,10 +72,8 @@ height = 120
 # and images, which are not yet supported):
 # https://specifications.freedesktop.org/notification/latest/markup.html
 message_layout = """
-<font_size=18.0 summary>
+<b><font_size=18.0 summary></b>
 from <i><app_name></i>
-
-<color=0x80FFFFFF ghost text>
 
 <font_size=12.0 body>
 """
@@ -123,13 +123,13 @@ enabled = true
 # Can be one of:
 #   Sans, SansSerif, Cursive, Fantasy, Monospace
 #   ... or a custom font family name, like below:
-font_family = "Liberation Mono"
+font_family = "Liberation"
 
 # Default font size in pixels (height of each glyph).
 font_size = 12.0
 
-text_color = 0xFF006090
-background_color = 0xFF406060
+text_color = 0xFF000000
+background_color = 0xFF80A0A0
 
 border_color = 0xFF000000
 border_size = 2
@@ -165,15 +165,15 @@ layer = "Overlay"
 # spacing of 2 pixels from all borders of the screen, and between notifications,
 # 4 pixels are expected (2 from each one's margins).
 [outputs."eDP-1".margins]
-top = 2
+top = 0
 right = 2
-bottom = 2
-left = 2
+bottom = 4
+left = 4
 
 # You can also specify different configurations for particular urgency levels.
 # There are three documented urgency levels: 'Low', 'Normal' and 'Critical'.
 [outputs."eDP-1".urgency.Critical]
-background_color = 0xFF806060
+background_color = 0xFFA08080
 border_color = 0xFFCC4040
 ```
 
