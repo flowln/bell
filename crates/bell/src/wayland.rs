@@ -22,6 +22,9 @@ use wayland_client::{EventQueue, Proxy, QueueHandle};
 
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1::WpCursorShapeManagerV1;
 
+use wayland_protocols::ext::idle_notify::v1::client::ext_idle_notifier_v1::ExtIdleNotifierV1;
+use wayland_protocols::ext::idle_notify::v1::client::ext_idle_notification_v1::ExtIdleNotificationV1;
+
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrLayerSurfaceV1;
 
@@ -485,6 +488,9 @@ pub struct WaylandState {
     pub seats: Vec<WlSeat>,
 
     pub cursor_shape_manager: Option<WpCursorShapeManagerV1>,
+    pub(self) idle_state_manager: Option<ExtIdleNotifierV1>,
+    pub(self) idle_state_notifications: OnceLock<HashMap<ObjectId, ExtIdleNotificationV1>>,
+    pub(self) current_idle_counter: u32,  // = 0 means it's not idle, > 0 means it's idle
 
     pub queue_handle: Option<QueueHandle<Self>>,
 
@@ -503,6 +509,9 @@ impl WaylandState {
             shared_memory: None,
             seats: Vec::new(),
             cursor_shape_manager: None,
+            idle_state_manager: None,
+            idle_state_notifications: OnceLock::new(),
+            current_idle_counter: 0,
             queue_handle: None,
             trigger_events: OnceLock::new(),
             surfaces: OnceLock::new(),
@@ -515,6 +524,7 @@ impl WaylandState {
 
         self.queue_handle = Some(queue_handle);
 
+        self.idle_state_notifications.get_or_init(|| HashMap::new());
         self.trigger_events.get_or_init(|| HashMap::new());
         self.surfaces.get_or_init(|| HashMap::new());
         self.outputs.get_or_init(|| HashMap::new());
@@ -530,6 +540,10 @@ impl WaylandState {
 
     pub fn add_output(&mut self, output_name: String, output: WlOutput) {
         self.outputs.get_mut().unwrap().insert(output_name, output);
+    }
+
+    pub fn is_currently_idle(&self) -> bool {
+        self.current_idle_counter != 0
     }
 
     pub fn consume_trigger_events(&mut self) -> &mut HashMap<SurfaceID, Vec<EventTrigger>> {

@@ -84,6 +84,14 @@ icon_theme = "Adwaita"
 # Default sound to use with the 'play-sound' event. This is a global configuration, and cannot be changed between outputs.
 default_sound = "/usr/share/sounds/freedesktop/stereo/message.oga"
 
+# The following idle options are global configurations.
+
+# Persist notifications (don't expire by timeout).
+# This only applies to notifications that do not explicitly set a timeout, and don't have the 'transient' hint.
+persist-when-idle = true
+# Time (in ms) idling on any seat before considering the user as idle.
+idle-time = 30000
+
 # Special section for describing actions to perform upon interacting with the notification.
 #
 # The available triggers are:

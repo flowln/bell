@@ -311,6 +311,14 @@ impl Default for EventResponse {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn default_idle_time() -> u32 {
+    30_000
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct Configuration {
     #[serde(flatten)]
@@ -320,6 +328,13 @@ pub struct Configuration {
 
     #[serde(default = "default_sound")]
     pub default_sound: String,
+
+    #[serde(default = "default_true")]
+    #[serde(rename = "persist-when-idle")]
+    pub persist_when_idle: bool,
+    #[serde(default = "default_idle_time")]
+    #[serde(rename = "idle-time")]
+    pub idle_time: u32,
 
     #[serde(default)]
     events: HashMap<EventTrigger, EventResponse>,

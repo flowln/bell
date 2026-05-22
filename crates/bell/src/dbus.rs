@@ -279,6 +279,17 @@ fn handle_notify_message(
         }
     };
 
+    // When set the server will treat the notification as transient and by-pass the server's persistence capability, if it should exist.
+    let is_transient = {
+        if let Some(transient_hint) = input.hints.get("transient") {
+            *transient_hint.0.as_any().downcast_ref::<bool>().unwrap_or(&false)
+        } else {
+            false
+        }
+    };
+
+    notification.transient = is_transient;
+
     // Notifications have an urgency level associated with them. This defines the importance of the notification.
     let urgency_level = {
         if let Some(urgency_variant) = input.hints.get("urgency") {

@@ -63,6 +63,7 @@ pub struct Notification {
     creation_time: time::Instant,
     expire_timeout: Option<time::Duration>,
     expire_timeout_thread_handle: Option<std::thread::JoinHandle<()>>,
+    pub transient: bool,
 
     outputs: HashMap<String, Arc<OutputConfiguration>>,
     surface_ids: Vec<SurfaceID>,
@@ -106,6 +107,7 @@ impl Notification {
             creation_time: time::Instant::now(),
             expire_timeout: None,
             expire_timeout_thread_handle: None,
+            transient: false,
             outputs: HashMap::new(),
             surface_ids: Vec::new(),
         }
@@ -276,7 +278,25 @@ impl Notification {
         self.expire_timeout = Some(timeout);
 
         if timeout == std::time::Duration::MAX {
-            // TODO: Use idle status to persist notifications when idling.
+            if !self.transient {
+                let persist_when_idle = {
+                    let manager = notification_manager_read(None);
+                    manager.get_configuration().unwrap().persist_when_idle
+                };
+
+                if persist_when_idle {
+                    let is_user_idle = {
+                        let wayland_state = wayland_state_read(None);
+                        wayland_state.is_currently_idle()
+                    };
+
+                    // Do not expire notifications if the user is away.
+                    if is_user_idle {
+                        return;
+                    }
+                }
+            }
+
             timeout = std::time::Duration::from_millis(5000);
         }
 
@@ -380,7 +400,7 @@ impl NotificationManager {
         self.active_configuration = Some(configuration);
     }
 
-    pub fn get_configuration(&mut self) -> Option<&Configuration> {
+    pub fn get_configuration(&self) -> Option<&Configuration> {
         self.active_configuration.as_ref()
     }
 

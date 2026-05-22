@@ -18,16 +18,23 @@ pub mod dispatcher {
     };
     use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1::WpCursorShapeManagerV1;
 
+    use wayland_protocols::ext::idle_notify::v1::client::ext_idle_notifier_v1::ExtIdleNotifierV1;
+    use wayland_protocols::ext::idle_notify::v1::client::ext_idle_notification_v1::ExtIdleNotificationV1;
+
     use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1;
     use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrLayerSurfaceV1;
 
     use crate::wayland::WaylandState;
+    use crate::notification::notification_manager_read;
 
     macro_rules! debug_println {
         ($string:literal) => {
             if cfg!(debug_assertions) { println!($string) }
         };
         ($format:literal,$( $value:ident ),+) => {
+            if cfg!(debug_assertions) { println!($format, $( $value, )+) }
+        };
+        ($format:literal,$( $value:expr ),+) => {
             if cfg!(debug_assertions) { println!($format, $( $value, )+) }
         };
     }
@@ -50,6 +57,7 @@ pub mod dispatcher {
     pub struct SeatUserData {
         pointers: RwLock<Vec<WlPointer>>,
     }
+    pub struct IdleNotifierUserData;
 
     pub use wayland_client::protocol::wl_pointer::ButtonState;
     // Ref.: https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/tree/include/uapi/linux/input-event-codes.h?h=v7.0.2#n356
@@ -118,12 +126,33 @@ pub mod dispatcher {
                     } else if binds_on::<WpCursorShapeManagerV1>(&interface) {
                         state.cursor_shape_manager =
                             Some(registry.bind(name, version, queue_handle, UserData {}));
+                    } else if binds_on::<ExtIdleNotifierV1>(&interface) {
+                        state.idle_state_manager =
+                            Some(registry.bind(name, version, queue_handle, UserData {}));
                     }
 
                     debug_println!("Name: {name}, Interface: {interface}");
                 }
                 wl_registry::Event::GlobalRemove { name } => {
                     debug_println!("[Removed] Name: {name}");
+
+                    state.seats.retain(|seat| {
+                        if seat.id().protocol_id() != name {
+                            true
+                        } else {
+                            seat.release();
+
+                            if let Some(notification) = state.idle_state_notifications.get_mut().unwrap().remove(&seat.id()) {
+                                notification.destroy();
+
+                                // Reset idle status. This won't be an issue for other idling seats, since we never go below 0.
+                                // It also seems to make sense to get out of idle state when removing a seat.
+                                state.current_idle_counter = 0;
+                            }
+
+                            false
+                        }
+                    });
                 }
                 _ => {
                     unreachable!()
@@ -356,6 +385,16 @@ pub mod dispatcher {
                 }
                 EventType::Name { name } => {
                     debug_println!("WlSeat: Registered seat with name '{name}'");
+
+                    if let Some(idle_state_manager) = &state.idle_state_manager {
+                        let idle_time = {
+                            let manager = notification_manager_read(None);
+                            manager.get_configuration().unwrap().idle_time
+                        };
+
+                        let notification = idle_state_manager.get_idle_notification(idle_time, proxy, queue_handle, IdleNotifierUserData {});
+                        state.idle_state_notifications.get_mut().unwrap().insert(proxy.id(), notification);
+                    }
                 }
                 _ => {
                     unreachable!()
@@ -409,6 +448,32 @@ pub mod dispatcher {
                 _ => {
                     debug_println!("WlOutput: {:?}", event);
                 }
+            }
+        }
+    }
+
+    impl Dispatch<ExtIdleNotificationV1, IdleNotifierUserData> for WaylandState {
+        fn event(
+            state: &mut WaylandState,
+            _proxy: &ExtIdleNotificationV1,
+            event: <ExtIdleNotificationV1 as Proxy>::Event,
+            _data: &IdleNotifierUserData,
+            _conn: &Connection,
+            _qhandle: &QueueHandle<WaylandState>,
+        ) {
+            type EventType = <ExtIdleNotificationV1 as Proxy>::Event;
+            match event {
+                EventType::Idled => {
+                    state.current_idle_counter += 1;
+                    debug_println!("Started idling. Current count: {}.", state.current_idle_counter);
+                }
+                EventType::Resumed => {
+                    if state.current_idle_counter > 0 {
+                        state.current_idle_counter -= 1;
+                    }
+                    debug_println!("Resumed from idle. Current count: {}.", state.current_idle_counter);
+                }
+                _ => unreachable!(),
             }
         }
     }
