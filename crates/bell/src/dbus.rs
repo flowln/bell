@@ -7,10 +7,12 @@ use std::time::Duration;
 use dbus::Message;
 use dbus::arg::{PropMap, RefArg};
 use dbus::blocking::Connection;
+use dbus::blocking::stdintf::org_freedesktop_dbus::RequestNameReply;
 use dbus_crossroads::{Context, Crossroads, MethodErr};
 
 use crate::notification::{
-    ImageSource, Notification, NotificationCloseReason, NotificationError, notification_manager_write,
+    ImageSource, Notification, NotificationCloseReason, NotificationError,
+    notification_manager_write,
 };
 
 macro_rules! create_struct_tuple_pair {
@@ -76,7 +78,14 @@ pub fn create_connection(
     process_notification: Arc<(Mutex<bool>, Condvar)>,
 ) -> Result<Connection, Box<dyn Error>> {
     let connection = Connection::new_session()?;
-    connection.request_name(NOTIFICATION_BUS_INTERFACE_NAME, true, true, false)?;
+    let conn_attempt =
+        connection.request_name(NOTIFICATION_BUS_INTERFACE_NAME, true, true, false)?;
+
+    if conn_attempt == RequestNameReply::InQueue {
+        println!(
+            "FreeDesktop notification interface already has an owner which didn't yield control. Waiting in queue until we can obtain the bus."
+        );
+    }
 
     let mut crossroads = Crossroads::new();
 
@@ -206,7 +215,7 @@ fn handle_notify_message(
 
     // Actions are sent over as a list of pairs.
     // Each even element in the list (starting at index 0) represents the identifier for the action.
-    // Each odd element in the list is the localized string that will be displayed to the user. 
+    // Each odd element in the list is the localized string that will be displayed to the user.
     let mut actions = BTreeMap::new();
     for [action_key, display_name] in input.actions.as_chunks::<2>().0 {
         actions.insert(action_key.clone(), display_name.clone());
@@ -236,7 +245,9 @@ fn handle_notify_message(
             match std::path::PathBuf::from_str(path) {
                 Ok(path_buf) => notification.image_data = Some(ImageSource::Path(path_buf)),
                 Err(_) => {
-                    eprintln!("Parsing 'image-path' as an icon name in a theme is not yet supported.");
+                    eprintln!(
+                        "Parsing 'image-path' as an icon name in a theme is not yet supported."
+                    );
                 }
             }
         } else {
@@ -253,7 +264,11 @@ fn handle_notify_message(
     // When set the server will not automatically remove the notification when an action has been invoked.
     let is_resident = {
         if let Some(resident_hint) = input.hints.get("resident") {
-            *resident_hint.0.as_any().downcast_ref::<bool>().unwrap_or(&false)
+            *resident_hint
+                .0
+                .as_any()
+                .downcast_ref::<bool>()
+                .unwrap_or(&false)
         } else {
             false
         }
@@ -282,7 +297,11 @@ fn handle_notify_message(
     // When set the server will treat the notification as transient and by-pass the server's persistence capability, if it should exist.
     let is_transient = {
         if let Some(transient_hint) = input.hints.get("transient") {
-            *transient_hint.0.as_any().downcast_ref::<bool>().unwrap_or(&false)
+            *transient_hint
+                .0
+                .as_any()
+                .downcast_ref::<bool>()
+                .unwrap_or(&false)
         } else {
             false
         }
