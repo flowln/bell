@@ -159,7 +159,7 @@ fn render_notification(
     }
 
     use cosmic_text::Family;
-    let mut default_text_opts = render::text::Attrs::new();
+    let mut default_text_opts = render::Attrs::new();
     if let Some(font_family) = &urgency_spec.font_family {
         let family = match font_family.as_str() {
             "Serif" | "serif" => Family::Serif,

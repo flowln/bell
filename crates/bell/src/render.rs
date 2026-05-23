@@ -38,9 +38,11 @@ pub mod render {
     use std::io::{Error, ErrorKind};
     use std::path::PathBuf;
 
+    use cosmic_text::{Align, Buffer, FontSystem, Shaping, SwashCache};
+
     use png::{ColorType, OutputInfo};
 
-    use crate::render::{blend_colors, text::*};
+    use crate::render::*;
 
     const PI_2: f32 = 2.0 * std::f32::consts::PI;
 
@@ -61,24 +63,34 @@ pub mod render {
         pub height: usize,
         buffer_scale: usize,
 
-        text_renderer: TextRenderer,
+        font_system: FontSystem,
+        swash_cache: SwashCache,
+
+        buffer: Option<Buffer>,
 
         clear_color: Color,
     }
 
     impl Renderer {
         pub fn new(width: usize, height: usize, clear_color: Color) -> Renderer {
-            let text_renderer = TextRenderer::new(width, height, 1);
-
-            Renderer {
+            let mut renderer = Renderer {
                 backing_store: vec![0; width * height],
                 backing_store_stride: width,
                 width,
                 height,
                 buffer_scale: 1,
-                text_renderer,
+                font_system: FontSystem::new(),
+                swash_cache: SwashCache::new(),
+                buffer: None,
                 clear_color,
-            }
+            };
+
+            let metrics = Metrics::new(12.0, 20.0);
+            renderer
+                .buffer
+                .replace(Buffer::new(&mut renderer.font_system, metrics));
+
+            renderer
         }
 
         pub fn get_backing_store(&mut self) -> &mut [u32] {
@@ -91,7 +103,6 @@ pub mod render {
             }
 
             self.buffer_scale = scale_factor as usize;
-            self.text_renderer.buffer_scale = self.buffer_scale;
 
             self.backing_store.resize(
                 self.width * self.height * (self.buffer_scale.pow(2)) as usize,
@@ -114,15 +125,98 @@ pub mod render {
             max_height: usize,
             default_options: Attrs<'a>,
         ) {
-            self.text_renderer.draw_text_spans(
-                &mut self.backing_store,
-                text_spans,
-                x,
-                y,
-                max_width,
-                max_height,
-                default_options,
+            let scale_attrs = |attrs: &Attrs<'a>| {
+                attrs
+                    .clone()
+                    .metrics(self.scale_metrics(attrs.metrics_opt.unwrap().into()))
+            };
+
+            let mut str_spans = Vec::new();
+            text_spans
+                .iter()
+                .for_each(|(text, attrs)| str_spans.push((text.as_str(), scale_attrs(attrs))));
+
+            let mut buffer = self
+                .buffer
+                .as_mut()
+                .unwrap()
+                .borrow_with(&mut self.font_system);
+
+            let (x, y) = with_scale!(self, x, y);
+            let (width, max_width, height, max_height) =
+                with_scale!(self, self.width, max_width, self.height, max_height);
+            let (buffer_width, buffer_height) = (
+                f32::from(usize::min(width - x, max_width) as u16),
+                f32::from(usize::min(height - y, max_height) as u16),
             );
+            buffer.set_size(Some(buffer_width), Some(buffer_height));
+
+            buffer.set_rich_text(
+                str_spans,
+                &default_options,
+                Shaping::Advanced,
+                Some(Align::Left),
+            );
+
+            use cosmic_text::Wrap;
+            buffer.set_wrap(Wrap::WordOrGlyph);
+
+            // FIXME: This option seems to only take into account the metrics of each text span individually,
+            // so if e.g. the body is split into two spans, it can have like two lines per span and still not
+            // be ellipsized.
+            use cosmic_text::{Ellipsize, EllipsizeHeightLimit};
+            buffer.set_ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(2)));
+
+            let mut callback = |x_glyph, y_glyph, w, h, c| {
+                Self::text_draw_callback(
+                    self.backing_store.as_mut_slice(),
+                    self.backing_store_stride,
+                    x.wrapping_add(x_glyph as usize) as u32,
+                    y.wrapping_add(y_glyph as usize) as u32,
+                    w,
+                    h,
+                    c,
+                )
+            };
+
+            buffer.draw(
+                &mut self.swash_cache,
+                Color::rgb(0x00, 0x00, 0x00),
+                &mut callback,
+            );
+        }
+
+        fn text_draw_callback(
+            backend: &mut [u32],
+            backend_stride: usize,
+            x: u32,
+            y: u32,
+            glyph_width: u32,
+            glyph_height: u32,
+            color: Color,
+        ) {
+            let buffer_size = backend.len();
+
+            for idy in 0..glyph_height {
+                for idx in 0..glyph_width {
+                    // NOTE: We let it overflow naturally, as we check it against buffer_size right after.
+                    let index = ((y + idy) * (backend_stride as u32) + (x + idx)) as usize;
+                    if index >= buffer_size {
+                        continue;
+                    }
+
+                    let mut actual_color = color;
+                    if color.a() != 0xFF {
+                        actual_color = blend_colors(Color(backend[index]), color);
+                    }
+
+                    backend[index] = actual_color.0;
+                }
+            }
+        }
+
+        fn scale_metrics(&self, metrics: Metrics) -> Metrics {
+            metrics.scale(f32::from(self.buffer_scale as u16))
         }
 
         pub fn draw_image(
@@ -557,147 +651,6 @@ pub mod render {
             let y = if y >= 0 { y } else { (self.height as i32) + y };
 
             (x as usize, y as usize)
-        }
-    }
-}
-
-pub mod text {
-    pub use crate::render::{Attrs, Color, Metrics};
-    use cosmic_text::{Align, Buffer, FontSystem, Shaping, SwashCache};
-
-    pub struct TextRenderer {
-        pub width: usize,
-        pub height: usize,
-        pub buffer_scale: usize,
-
-        font_system: FontSystem,
-        swash_cache: SwashCache,
-
-        buffer: Option<Buffer>,
-    }
-
-    impl TextRenderer {
-        pub fn new(width: usize, height: usize, buffer_scale: usize) -> TextRenderer {
-            let metrics = Metrics::new(12.0, 20.0);
-
-            let mut renderer = TextRenderer {
-                width,
-                height,
-                buffer_scale,
-                font_system: FontSystem::new(),
-                swash_cache: SwashCache::new(),
-                buffer: None,
-            };
-
-            renderer
-                .buffer
-                .replace(Buffer::new(&mut renderer.font_system, metrics));
-
-            renderer
-        }
-
-        pub fn draw_text_spans<'a>(
-            &mut self,
-            backend: &mut [u32],
-            text_spans: Vec<(String, Attrs<'a>)>,
-            x: i32,
-            y: i32,
-            max_width: usize,
-            max_height: usize,
-            default_options: Attrs<'a>,
-        ) {
-            let scale_attrs = |attrs: &Attrs<'a>| {
-                attrs
-                    .clone()
-                    .metrics(self.scale_metrics(attrs.metrics_opt.unwrap().into()))
-            };
-
-            let mut str_spans = Vec::new();
-            text_spans
-                .iter()
-                .for_each(|(text, attrs)| str_spans.push((text.as_str(), scale_attrs(attrs))));
-
-            let mut buffer = self
-                .buffer
-                .as_mut()
-                .unwrap()
-                .borrow_with(&mut self.font_system);
-
-            let (x, y) = with_scale!(self, x, y);
-            let (width, max_width, height, max_height) =
-                with_scale!(self, self.width, max_width, self.height, max_height);
-            let (buffer_width, buffer_height) = (
-                f32::from(usize::min(width - x, max_width) as u16),
-                f32::from(usize::min(height - y, max_height) as u16),
-            );
-            buffer.set_size(Some(buffer_width), Some(buffer_height));
-
-            buffer.set_rich_text(
-                str_spans,
-                &default_options,
-                Shaping::Advanced,
-                Some(Align::Left),
-            );
-
-            use cosmic_text::Wrap;
-            buffer.set_wrap(Wrap::WordOrGlyph);
-
-            // FIXME: This option seems to only take into account the metrics of each text span individually,
-            // so if e.g. the body is split into two spans, it can have like two lines per span and still not
-            // be ellipsized.
-            use cosmic_text::{Ellipsize, EllipsizeHeightLimit};
-            buffer.set_ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(2)));
-
-            let mut callback = |x_glyph, y_glyph, w, h, c| {
-                TextRenderer::draw_callback(
-                    backend,
-                    with_scale!(self, self.width),
-                    x.wrapping_add(x_glyph as usize) as u32,
-                    y.wrapping_add(y_glyph as usize) as u32,
-                    w,
-                    h,
-                    c,
-                )
-            };
-
-            buffer.draw(
-                &mut self.swash_cache,
-                Color::rgb(0x00, 0x00, 0x00),
-                &mut callback,
-            );
-        }
-
-        fn draw_callback(
-            backend: &mut [u32],
-            backend_stride: usize,
-            x: u32,
-            y: u32,
-            glyph_width: u32,
-            glyph_height: u32,
-            color: Color,
-        ) {
-            let buffer_size = backend.len();
-
-            for idy in 0..glyph_height {
-                for idx in 0..glyph_width {
-                    // NOTE: We let it overflow naturally, as we check it against buffer_size right after.
-                    let index = ((y + idy) * (backend_stride as u32) + (x + idx)) as usize;
-                    if index >= buffer_size {
-                        continue;
-                    }
-
-                    let mut actual_color = color;
-                    if color.a() != 0xFF {
-                        actual_color = crate::render::blend_colors(Color(backend[index]), color);
-                    }
-
-                    backend[index] = actual_color.0;
-                }
-            }
-        }
-
-        fn scale_metrics(&self, metrics: Metrics) -> Metrics {
-            metrics.scale(f32::from(self.buffer_scale as u16))
         }
     }
 }
