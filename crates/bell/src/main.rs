@@ -154,6 +154,9 @@ fn render_notification(
                     }
                     _ => {}
                 }
+
+                image_size_x = width + padding_x;
+                _image_size_y = height + padding_y;
             }
         }
     }
