@@ -13,16 +13,19 @@ fn blend_colors(background_color: Color, foreground_color: Color) -> Color {
     let background_frac = 1. - foreground_frac;
 
     let r = unsafe {
-        (background_frac * f32::from(background_color.r()) + foreground_frac * f32::from(foreground_color.r()))
-            .to_int_unchecked::<u32>()
+        (background_frac * f32::from(background_color.r())
+            + foreground_frac * f32::from(foreground_color.r()))
+        .to_int_unchecked::<u32>()
     };
     let g = unsafe {
-        (background_frac * f32::from(background_color.g()) + foreground_frac * f32::from(foreground_color.g()))
-            .to_int_unchecked::<u32>()
+        (background_frac * f32::from(background_color.g())
+            + foreground_frac * f32::from(foreground_color.g()))
+        .to_int_unchecked::<u32>()
     };
     let b = unsafe {
-        (background_frac * f32::from(background_color.b()) + foreground_frac * f32::from(foreground_color.b()))
-            .to_int_unchecked::<u32>()
+        (background_frac * f32::from(background_color.b())
+            + foreground_frac * f32::from(foreground_color.b()))
+        .to_int_unchecked::<u32>()
     };
     let a = background_color.a().max(foreground_color.a()) as u32;
 
@@ -38,7 +41,7 @@ pub mod render {
     use std::io::{Error, ErrorKind};
     use std::path::PathBuf;
 
-    use cosmic_text::{Align, Buffer, FontSystem, Shaping, SwashCache};
+    use cosmic_text::{Align, Buffer, FontSystem, PhysicalGlyph, Shaping, SwashCache};
 
     use png::{ColorType, OutputInfo};
 
@@ -55,6 +58,30 @@ pub mod render {
         }
     }
 
+    #[derive(Copy, Clone, Debug, Default)]
+    struct Transform {
+        x_offset: usize,
+        y_offset: usize,
+    }
+
+    impl<T: TryInto<usize>> From<(T, T)> for Transform
+    where
+        <T as TryInto<usize>>::Error: fmt::Debug,
+    {
+        fn from(v: (T, T)) -> Transform {
+            Transform {
+                x_offset: v.0.try_into().unwrap(),
+                y_offset: v.1.try_into().unwrap(),
+            }
+        }
+    }
+
+    impl Into<(usize, usize)> for Transform {
+        fn into(self) -> (usize, usize) {
+            (self.x_offset, self.y_offset)
+        }
+    }
+
     pub struct Renderer {
         backing_store: Vec<u32>,
         backing_store_stride: usize,
@@ -66,14 +93,14 @@ pub mod render {
         font_system: FontSystem,
         swash_cache: SwashCache,
 
-        buffer: Option<Buffer>,
+        active_transform: Option<Transform>,
 
         clear_color: Color,
     }
 
     impl Renderer {
         pub fn new(width: usize, height: usize, clear_color: Color) -> Renderer {
-            let mut renderer = Renderer {
+            Renderer {
                 backing_store: vec![0; width * height],
                 backing_store_stride: width,
                 width,
@@ -81,16 +108,9 @@ pub mod render {
                 buffer_scale: 1,
                 font_system: FontSystem::new(),
                 swash_cache: SwashCache::new(),
-                buffer: None,
+                active_transform: None,
                 clear_color,
-            };
-
-            let metrics = Metrics::new(12.0, 20.0);
-            renderer
-                .buffer
-                .replace(Buffer::new(&mut renderer.font_system, metrics));
-
-            renderer
+            }
         }
 
         pub fn get_backing_store(&mut self) -> &mut [u32] {
@@ -125,32 +145,20 @@ pub mod render {
             max_height: usize,
             default_options: Attrs<'a>,
         ) {
-            let scale_attrs = |attrs: &Attrs<'a>| {
-                attrs
-                    .clone()
-                    .metrics(self.scale_metrics(attrs.metrics_opt.unwrap().into()))
-            };
+            self.active_transform = Some(Transform::from((x, y)));
+
+            let scale_attrs =
+                |attrs: &Attrs<'a>| attrs.clone().metrics(attrs.metrics_opt.unwrap().into());
 
             let mut str_spans = Vec::new();
             text_spans
                 .iter()
                 .for_each(|(text, attrs)| str_spans.push((text.as_str(), scale_attrs(attrs))));
 
-            let mut buffer = self
-                .buffer
-                .as_mut()
-                .unwrap()
-                .borrow_with(&mut self.font_system);
-
-            let (x, y) = with_scale!(self, x, y);
-            let (width, max_width, height, max_height) =
-                with_scale!(self, self.width, max_width, self.height, max_height);
-            let (buffer_width, buffer_height) = (
-                f32::from(usize::min(width - x, max_width) as u16),
-                f32::from(usize::min(height - y, max_height) as u16),
-            );
-            buffer.set_size(Some(buffer_width), Some(buffer_height));
-
+            let default_metrics = default_options
+                .metrics_opt
+                .unwrap_or(Metrics::new(12.0, 20.0).into());
+            let mut buffer = Buffer::new_empty(default_metrics.into());
             buffer.set_rich_text(
                 str_spans,
                 &default_options,
@@ -158,65 +166,84 @@ pub mod render {
                 Some(Align::Left),
             );
 
+            buffer.set_size(Some(max_width as f32), Some(max_height as f32));
+
             use cosmic_text::Wrap;
             buffer.set_wrap(Wrap::WordOrGlyph);
 
-            // FIXME: This option seems to only take into account the metrics of each text span individually,
-            // so if e.g. the body is split into two spans, it can have like two lines per span and still not
-            // be ellipsized.
-            use cosmic_text::{Ellipsize, EllipsizeHeightLimit};
-            buffer.set_ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(2)));
+            use cosmic_text::Renderer;
+            use cosmic_text::render_decoration;
 
-            let mut callback = |x_glyph, y_glyph, w, h, c| {
-                Self::text_draw_callback(
-                    self.backing_store.as_mut_slice(),
-                    self.backing_store_stride,
-                    x.wrapping_add(x_glyph as usize) as u32,
-                    y.wrapping_add(y_glyph as usize) as u32,
-                    w,
-                    h,
-                    c,
-                )
-            };
+            const DEFAULT_COLOR: Color = Color::rgb(0, 0, 0);
 
-            buffer.draw(
-                &mut self.swash_cache,
-                Color::rgb(0x00, 0x00, 0x00),
-                &mut callback,
-            );
+            let scale_factor = self.buffer_scale as f32;
+
+            self.layout_text_lines(&mut buffer, max_height);
+            for line in buffer.layout_runs() {
+                for glyph in line.glyphs {
+                    let physical_glyph =
+                        glyph.physical((0.0, scale_factor * line.line_y), scale_factor);
+                    let glyph_color = glyph.color_opt.map_or(DEFAULT_COLOR, |s| s);
+
+                    self.glyph(physical_glyph, glyph_color);
+                }
+
+                render_decoration(self, &line, DEFAULT_COLOR);
+            }
+
+            self.active_transform = None;
         }
 
-        fn text_draw_callback(
-            backend: &mut [u32],
-            backend_stride: usize,
-            x: u32,
-            y: u32,
-            glyph_width: u32,
-            glyph_height: u32,
-            color: Color,
-        ) {
-            let buffer_size = backend.len();
+        fn layout_text_lines(&mut self, buffer: &mut Buffer, max_height: usize) {
+            let metrics = buffer.metrics();
 
-            for idy in 0..glyph_height {
-                for idx in 0..glyph_width {
-                    // NOTE: We let it overflow naturally, as we check it against buffer_size right after.
-                    let index = ((y + idy) * (backend_stride as u32) + (x + idx)) as usize;
-                    if index >= buffer_size {
-                        continue;
+            buffer.shape_until_scroll(&mut self.font_system, false);
+
+            let mut total_height = 0.0;
+            'all: for line_index in 0..buffer.lines.len() {
+                let layout = buffer
+                    .line_layout(&mut self.font_system, line_index)
+                    .expect("shape_until_scroll invalid line");
+
+                let mut layout_height = 0.0;
+                for layout_line in layout {
+                    let layout_line_height =
+                        layout_line.line_height_opt.unwrap_or(metrics.line_height);
+                    layout_height += layout_line_height;
+                    total_height += layout_line_height;
+
+                    if total_height > max_height as f32 {
+                        self.layout_last_text_line(buffer, line_index, layout_height);
+
+                        break 'all;
                     }
-
-                    let mut actual_color = color;
-                    if color.a() != 0xFF {
-                        actual_color = blend_colors(Color(backend[index]), color);
-                    }
-
-                    backend[index] = actual_color.0;
                 }
             }
         }
 
-        fn scale_metrics(&self, metrics: Metrics) -> Metrics {
-            metrics.scale(f32::from(self.buffer_scale as u16))
+        fn layout_last_text_line(
+            &mut self,
+            buffer: &mut Buffer,
+            buffer_line_index: usize,
+            layout_height: f32,
+        ) {
+            use cosmic_text::{Ellipsize, EllipsizeHeightLimit};
+            let old_ellipsize = buffer.ellipsize();
+            buffer.set_ellipsize(Ellipsize::End(EllipsizeHeightLimit::Height(
+                layout_height as f32,
+            )));
+
+            buffer
+                .lines
+                .get_mut(buffer_line_index)
+                .unwrap()
+                .reset_layout();
+            let _ = buffer
+                .line_layout(&mut self.font_system, buffer_line_index)
+                .expect("shape_until_scroll invalid line");
+
+            buffer.set_ellipsize(old_ellipsize);
+            buffer.set_redraw(false);
         }
 
         pub fn draw_image(
@@ -572,7 +599,19 @@ pub mod render {
             }
         }
 
-        pub fn draw_rect(&mut self, x: i32, y: i32, width: usize, height: usize, color: Color) {
+        pub fn draw_rect(
+            &mut self,
+            mut x: i32,
+            mut y: i32,
+            width: usize,
+            height: usize,
+            color: Color,
+        ) {
+            if let Some(transform) = &self.active_transform {
+                x = x + transform.x_offset as i32;
+                y = y + transform.y_offset as i32;
+            }
+
             let (x, y) = self.wrap_position(x, y);
 
             self.draw_rect_with_scale(x, y, width, height, None, None, color, true);
@@ -585,12 +624,17 @@ pub mod render {
 
         fn draw_point_with_scale(
             &mut self,
-            x_original: usize,
-            y_original: usize,
+            mut x_original: usize,
+            mut y_original: usize,
             width_scale: Option<f32>,
             height_scale: Option<f32>,
             color: Color,
         ) {
+            if let Some(transform) = &self.active_transform {
+                x_original += transform.x_offset;
+                y_original += transform.y_offset;
+            }
+
             self.draw_rect_with_scale(
                 x_original,
                 y_original,
@@ -652,5 +696,70 @@ pub mod render {
 
             (x as usize, y as usize)
         }
+    }
+
+    impl cosmic_text::Renderer for Renderer {
+        fn glyph(&mut self, physical_glyph: PhysicalGlyph, glyph_color: Color) {
+            let image = self
+                .swash_cache
+                .get_image(&mut self.font_system, physical_glyph.cache_key)
+                .as_ref()
+                .expect("Failed to retrieve image data for glyph.");
+
+            let mut render_at = |x, y, mut color: Color| {
+                let backing_store_index = y * self.backing_store_stride + x;
+
+                if color.a() != 0xFF {
+                    color = blend_colors(Color(self.backing_store[backing_store_index]), color);
+                }
+
+                self.backing_store[backing_store_index] = color.0;
+            };
+
+            let (x_offset, y_offset) = self.active_transform.unwrap_or_default().into();
+            let (x_offset, y_offset) = with_scale!(self, x_offset, y_offset);
+
+            for y_index in 0..image.placement.height {
+                let y = y_offset.saturating_add_signed(
+                    (physical_glyph.y - image.placement.top + y_index as i32) as isize,
+                );
+                for x_index in 0..image.placement.width {
+                    let x = x_offset.saturating_add_signed(
+                        (physical_glyph.x + image.placement.left + x_index as i32) as isize,
+                    );
+
+                    render_at(
+                        x,
+                        y,
+                        get_color_for_glyph(image, x_index, y_index, glyph_color),
+                    );
+                }
+            }
+        }
+
+        fn rectangle(&mut self, x: i32, y: i32, w: u32, h: u32, color: Color) {
+            self.draw_rect(x, y, w as usize, h as usize, color);
+        }
+    }
+
+    use cosmic_text::{SwashContent, SwashImage};
+
+    fn get_color_for_glyph(
+        image: &SwashImage,
+        x_index: u32,
+        y_index: u32,
+        glyph_color: Color,
+    ) -> Color {
+        let data_index = (y_index * image.placement.width + x_index) as usize;
+
+        let raw_data = match image.content {
+            SwashContent::Color | SwashContent::SubpixelMask => {
+                let data = image.data.as_ptr() as *const u32;
+                unsafe { data.offset(data_index as isize).read() }
+            }
+            SwashContent::Mask => (glyph_color.0.unbounded_shl(8)) | image.data[data_index] as u32,
+        };
+
+        Color(raw_data.rotate_right(8))
     }
 }
