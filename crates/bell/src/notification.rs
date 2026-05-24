@@ -272,28 +272,21 @@ impl Notification {
         }
     }
 
-    pub(crate) fn set_timeout(&mut self, mut timeout: std::time::Duration) {
+    pub(crate) fn set_timeout(&mut self, mut timeout: std::time::Duration, persist_when_idle: bool) {
         // TODO: Take handle into old thread (if it exists) and interrupt it.
 
         self.expire_timeout = Some(timeout);
 
         if timeout == std::time::Duration::MAX {
-            if !self.transient {
-                let persist_when_idle = {
-                    let manager = notification_manager_read(None);
-                    manager.get_configuration().unwrap().persist_when_idle
+            if !self.transient && persist_when_idle {
+                let is_user_idle = {
+                    let wayland_state = wayland_state_read(None);
+                    wayland_state.is_currently_idle()
                 };
 
-                if persist_when_idle {
-                    let is_user_idle = {
-                        let wayland_state = wayland_state_read(None);
-                        wayland_state.is_currently_idle()
-                    };
-
-                    // Do not expire notifications if the user is away.
-                    if is_user_idle {
-                        return;
-                    }
+                // Do not expire notifications if the user is away.
+                if is_user_idle {
+                    return;
                 }
             }
 
@@ -312,6 +305,7 @@ impl Notification {
             if let Some(id) = id {
                 let mut manager = notification_manager_write(None);
                 let _ = manager.close_notification(id, NotificationCloseReason::Expired);
+                manager.notify_change();
             }
         }));
     }
@@ -408,6 +402,12 @@ impl NotificationManager {
         self.notify_change_handler = Some(handler);
     }
 
+    pub fn notify_change(&self) {
+        if let Some(handler) = &self.notify_change_handler {
+            handler.1.notify_all();
+        }
+    }
+
     pub fn add_notification(&mut self, mut notification: Notification) -> u32 {
         self.biggest_id_given = self.biggest_id_given.wrapping_add(1);
         if self.biggest_id_given == 0 {
@@ -431,10 +431,6 @@ impl NotificationManager {
         self.active_notifications
             .insert(self.biggest_id_given, notification);
 
-        if let Some(handler) = &self.notify_change_handler {
-            handler.1.notify_all();
-        }
-
         self.biggest_id_given
     }
 
@@ -452,8 +448,9 @@ impl NotificationManager {
     }
 
     pub fn set_timeout_for_notification(&mut self, id: &u32, timeout: std::time::Duration) {
+        let persist_when_idle = self.get_configuration().unwrap().persist_when_idle;
         match self.active_notifications.get_mut(id) {
-            Some(notification) => notification.set_timeout(timeout),
+            Some(notification) => notification.set_timeout(timeout, persist_when_idle),
             None => eprintln!("Failed to retrieve notification with id {}.", id),
         }
     }
@@ -466,10 +463,6 @@ impl NotificationManager {
         self.expire_notification(&id)?;
 
         self.inactive_uncommited_notification_ids.push((id, reason));
-
-        if let Some(handler) = &self.notify_change_handler {
-            handler.1.notify_all();
-        }
 
         Ok(())
     }
