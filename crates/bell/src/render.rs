@@ -800,7 +800,7 @@ pub mod render {
         let raw_data = match image.content {
             SwashContent::Color | SwashContent::SubpixelMask => {
                 let data = image.data.as_ptr() as *const u32;
-                unsafe { data.offset(data_index as isize).read() }
+                unsafe { data.offset(data_index as isize).read().to_be() }
             }
             SwashContent::Mask => (glyph_color.0.unbounded_shl(8)) | image.data[data_index] as u32,
         };
