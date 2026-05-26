@@ -58,6 +58,7 @@ height = 120
 # All text can be customized by the <(option)=(value) ...> syntax.
 # Available options currently are:
 #   font_size: Font size in pixels
+#   line_height: Force a specific line height, in pixels.
 #   color: Text foreground color in 0xAARRGGBB format
 #
 # Besides that, the following texts are substituted by the notification parameter:

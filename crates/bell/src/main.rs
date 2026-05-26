@@ -183,8 +183,9 @@ fn render_notification(
         let default_opt_values = default_opts.unwrap_or(&default_opt_default);
 
         let font_size = text_options.font_size;
+        let line_height = text_options.line_height;
         // NOTE: Arbitrary values to make a reasonable line height.
-        let metrics = Metrics::new(font_size, font_size + 6.0f32.min(font_size * 0.3));
+        let metrics = Metrics::new(font_size, line_height);
         let mut attrs = default_text_opts
             .clone()
             .metrics(metrics)

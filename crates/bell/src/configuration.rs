@@ -347,6 +347,7 @@ pub struct Configuration {
 #[derive(Copy, Clone, Debug, Default)]
 pub struct TextOptions {
     pub font_size: f32,
+    pub line_height: f32,
     pub text_color: u32,
 
     pub bold: bool,
@@ -408,13 +409,73 @@ impl UrgencyConfiguration {
                 "u" => current_text_options.underline = true,
                 "/u" => current_text_options.underline = false,
                 fragment => {
-                    let (parsed_fragment, font_size, text_color) =
-                        self.parse_layout_fragment(fragment, starting_text_options);
+                    let current_line_height = current_text_options.line_height;
 
-                    current_text_options.font_size = font_size;
-                    current_text_options.text_color = text_color;
+                    let mut parse_sections = |sections: Vec<&str>| {
+                        let preprocessed_fragment = sections.join("\n");
+                        if !preprocessed_fragment.is_empty() {
+                            let (parsed_fragment, font_size, line_height, text_color) =
+                                self.parse_layout_fragment(&preprocessed_fragment, starting_text_options);
 
-                    parsed_fragments.push((parsed_fragment, current_text_options.clone()));
+                            current_text_options.font_size = font_size;
+                            current_text_options.line_height = line_height;
+                            current_text_options.text_color = text_color;
+
+                            parsed_fragments.push((parsed_fragment, current_text_options.clone()));
+                        }
+                    };
+
+                    let mut current_sections = Vec::new();
+
+                    // Parse isolated / consecutive '\n's with a lower line height, so they don't take much space.
+                    let mut fragment_sections = fragment.split('\n').enumerate().peekable();
+                    while let Some((index, fragment_section)) = fragment_sections.next() {
+                        let should_add_newline = {
+                            if fragment_section.is_empty() {
+                                // Ignore segmenting of the last empty section, since X '\n's generate
+                                // X + 1 sections, but we only want to have X sections in the final output.
+                                // 
+                                // If peek.is_some:
+                                //   If is_empty:
+                                //     Fragment: (...)\n.\n($ | \n(...)) | ^.\n($ | \n(...))
+                                //     Always add newline; skip next section in first case
+                                //   Else:
+                                //     Fragment: (...)\n.\n(...) or ^.\n(abc)
+                                //     Only add newline in first case
+                                // Else:
+                                //   Fragment: (...)\n.$ or ^.$
+                                //   Never add newline
+                                if let Some((_, next_section)) = fragment_sections.peek() {
+                                    if next_section.is_empty() {
+                                        if index != 0 {
+                                            fragment_sections.next();
+                                        }
+
+                                        true
+                                    } else {
+                                        index != 0
+                                    }
+                                } else {
+                                    false
+                                }
+                            } else {
+                                // Fragment: (...)\n.(...)
+                                false
+                            }
+                        };
+
+                        if should_add_newline {
+                            parse_sections(current_sections);
+                            current_sections = Vec::new();
+
+                            let section = format!("line_height={} \n", (current_line_height / 2.0).min(12.0));
+                            parse_sections(vec![&section; 1]);
+                        } else {
+                            current_sections.push(fragment_section);
+                        }
+                    }
+
+                    parse_sections(current_sections);
                 }
             }
         }
@@ -426,28 +487,13 @@ impl UrgencyConfiguration {
         &self,
         layout_fragment: &str,
         default_options: Option<TextOptions>,
-    ) -> (String, f32, u32) {
+    ) -> (String, f32, f32, u32) {
         let fragment_split = layout_fragment.split(['=', ' ']).collect::<Vec<&str>>();
         let mut fragment_index = 0;
 
-        let mut font_size = None;
-        let mut text_color = None;
-
-        let default_font_size = {
-            if default_options.is_some() {
-                default_options.unwrap().font_size
-            } else {
-                self.font_size.unwrap()
-            }
-        };
-
-        let default_text_color = {
-            if default_options.is_some() {
-                Color(default_options.unwrap().text_color)
-            } else {
-                self.text_color.unwrap()
-            }
-        };
+        let mut font_size = default_options.map_or(self.font_size, |v| Some(v.font_size));
+        let mut line_height = default_options.map_or(None, |v| Some(v.line_height));
+        let mut text_color = default_options.map_or(self.text_color, |v| Some(Color(v.text_color)));
 
         loop {
             match fragment_split.as_slice()[fragment_index..] {
@@ -458,6 +504,17 @@ impl UrgencyConfiguration {
                         Ok(parsed_value) => font_size = Some(parsed_value),
                         Err(error) => eprintln!(
                             "Failed to parse 'font_size' parameter in 'message_layout': {}",
+                            error.to_string()
+                        ),
+                    }
+                }
+                ["line_height", value, ..] => {
+                    fragment_index += 2;
+
+                    match value.parse::<f32>() {
+                        Ok(parsed_value) => line_height = Some(parsed_value),
+                        Err(error) => eprintln!(
+                            "Failed to parse 'line_height' parameter in 'message_layout': {}",
                             error.to_string()
                         ),
                     }
@@ -492,11 +549,11 @@ impl UrgencyConfiguration {
 
         let fragment = fragment_split[fragment_index..].join(" ");
 
-        (
-            fragment,
-            font_size.unwrap_or(default_font_size),
-            text_color.unwrap_or(default_text_color).0,
-        )
+        let font_size = font_size.expect("Failed to parse font size for layout fragment.");
+        let line_height = line_height.unwrap_or(font_size + 4.0);
+        let text_color = text_color.expect("Failed to parse text color for layout fragment.").0;
+
+        (fragment, font_size, line_height, text_color)
     }
 }
 impl OutputConfiguration {
