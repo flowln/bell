@@ -41,7 +41,7 @@ pub mod render {
     use std::io::{Error, ErrorKind};
     use std::path::PathBuf;
 
-    use cosmic_text::{Align, Buffer, FontSystem, PhysicalGlyph, Shaping, SwashCache};
+    use cosmic_text::{Align, Buffer, FontSystem, LayoutRun, PhysicalGlyph, Shaping, SwashCache};
 
     use png::{ColorType, OutputInfo};
 
@@ -178,8 +178,8 @@ pub mod render {
 
             let scale_factor = self.buffer_scale as f32;
 
-            self.layout_text_lines(&mut buffer, max_height);
-            for line in buffer.layout_runs() {
+            let laid_out_lines = self.layout_text_lines(&mut buffer, max_height);
+            for line in laid_out_lines {
                 for glyph in line.glyphs {
                     let physical_glyph =
                         glyph.physical((0.0, scale_factor * line.line_y), scale_factor);
@@ -194,43 +194,88 @@ pub mod render {
             self.active_transform = None;
         }
 
-        fn layout_text_lines(&mut self, buffer: &mut Buffer, max_height: usize) {
+        fn layout_text_lines<'a>(&mut self, buffer: &'a mut Buffer, max_height: usize) -> Vec<LayoutRun<'a>> {
             let metrics = buffer.metrics();
 
-            buffer.shape_until_scroll(&mut self.font_system, false);
-
             let mut total_height = 0.0;
-            'all: for line_index in 0..buffer.lines.len() {
-                let layout = buffer
-                    .line_layout(&mut self.font_system, line_index)
-                    .expect("shape_until_scroll invalid line");
+            let mut current_line_height;
+            let mut line_index = 0;
+            'all: while line_index < buffer.lines.len() {
+                { // Shape line
+                    let shape = buffer.line_shape(&mut self.font_system, line_index).expect("failed to shape line");
+                    current_line_height = shape.metrics_opt.unwrap_or(metrics).line_height;
+                }
 
-                let mut layout_height = 0.0;
-                for layout_line in layout {
-                    let layout_line_height =
-                        layout_line.line_height_opt.unwrap_or(metrics.line_height);
-                    layout_height += layout_line_height;
-                    total_height += layout_line_height;
+                { // Layout line
+                    let layout = buffer
+                        .line_layout(&mut self.font_system, line_index)
+                        .expect("shape_until_scroll invalid line");
 
-                    if total_height > max_height as f32 {
-                        self.layout_last_text_line(buffer, line_index, layout_height);
+                    for (layout_line_index, layout_line) in layout.iter().enumerate() {
+                        let layout_line_height =
+                            layout_line.line_height_opt.unwrap_or(current_line_height);
+                        total_height += layout_line_height;
 
-                        break 'all;
+                        if total_height > max_height as f32 {
+                            // Do not consider this as a valid last line; use the number of the previous line.
+                            self.layout_last_text_line(buffer, line_index, layout_line_index);
+
+                            break 'all;
+                        }
+
                     }
                 }
+
+                line_index += 1;
             }
+
+            let mut laid_out_runs = Vec::new();
+
+            let mut line_top = 0.0;
+            let mut current_line_index = 0;
+
+            let laid_out_buffer_line_number = (line_index + 1).min(buffer.lines.len());
+            for buffer_line_index in 0..laid_out_buffer_line_number {
+                let buffer_line = buffer.lines.get(buffer_line_index).unwrap();
+                let layout_lines = buffer_line.layout_opt().unwrap();
+                for line in layout_lines {
+                    let line_height = line.line_height_opt.unwrap();
+                    let glyph_height = line.max_ascent + line.max_descent;
+                    let centering_offset = (line_height - glyph_height) / 2.0;
+                    let line_y = line_top + centering_offset + line.max_ascent;
+
+                    let run = LayoutRun {
+                        line_i: current_line_index,
+                        text: buffer_line.text(),
+                        rtl: buffer_line.shape_opt().unwrap().rtl,
+                        glyphs: line.glyphs.as_slice(),
+                        decorations: line.decorations.as_slice(),
+                        line_y: line_y,
+                        line_top: line_top,
+                        line_height: line_height,
+                        line_w: line.w,
+                    };
+
+                    laid_out_runs.push(run);
+
+                    line_top += line_height;
+                    current_line_index += 1;
+                }
+            }
+
+            laid_out_runs
         }
 
         fn layout_last_text_line(
             &mut self,
             buffer: &mut Buffer,
             buffer_line_index: usize,
-            layout_height: f32,
+            layout_max_lines: usize,
         ) {
             use cosmic_text::{Ellipsize, EllipsizeHeightLimit};
             let old_ellipsize = buffer.ellipsize();
-            buffer.set_ellipsize(Ellipsize::End(EllipsizeHeightLimit::Height(
-                layout_height as f32,
+            buffer.set_ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(
+                layout_max_lines,
             )));
 
             buffer
