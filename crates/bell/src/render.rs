@@ -194,21 +194,32 @@ pub mod render {
             self.active_transform = None;
         }
 
-        fn layout_text_lines<'a>(&mut self, buffer: &'a mut Buffer, max_height: usize) -> Vec<LayoutRun<'a>> {
+        fn layout_text_lines<'a>(
+            &mut self,
+            buffer: &'a mut Buffer,
+            max_height: usize,
+        ) -> Vec<LayoutRun<'a>> {
             let metrics = buffer.metrics();
 
             let mut total_height = 0.0;
             let mut current_line_height;
-            let mut line_index = 0;
-            'all: while line_index < buffer.lines.len() {
-                { // Shape line
-                    let shape = buffer.line_shape(&mut self.font_system, line_index).expect("failed to shape line");
+
+            let mut buffer_line_index = 0;
+            let mut last_buffer_line_laid_out_count = 0;
+
+            'all: while buffer_line_index < buffer.lines.len() {
+                {
+                    // Shape line
+                    let shape = buffer
+                        .line_shape(&mut self.font_system, buffer_line_index)
+                        .expect("failed to shape line");
                     current_line_height = shape.metrics_opt.unwrap_or(metrics).line_height;
                 }
 
-                { // Layout line
+                {
+                    // Layout line
                     let layout = buffer
-                        .line_layout(&mut self.font_system, line_index)
+                        .line_layout(&mut self.font_system, buffer_line_index)
                         .expect("shape_until_scroll invalid line");
 
                     for (layout_line_index, layout_line) in layout.iter().enumerate() {
@@ -216,17 +227,33 @@ pub mod render {
                             layout_line.line_height_opt.unwrap_or(current_line_height);
                         total_height += layout_line_height;
 
-                        if total_height > max_height as f32 {
-                            // Do not consider this as a valid last line; use the number of the previous line.
-                            self.layout_last_text_line(buffer, line_index, layout_line_index);
+                        if total_height >= max_height as f32 {
+                            if layout_line_index == 0 {
+                                // Do not consider this as a valid last line; use the number of the previous buffer line.
+                                buffer_line_index -= 1;
+                                self.layout_last_text_line(
+                                    buffer,
+                                    buffer_line_index,
+                                    last_buffer_line_laid_out_count,
+                                );
+                            } else {
+                                // Do not consider this as a valid last line; use the number of the previous layout line.
+                                last_buffer_line_laid_out_count = layout_line_index;
+                                self.layout_last_text_line(
+                                    buffer,
+                                    buffer_line_index,
+                                    layout_line_index,
+                                );
+                            }
 
                             break 'all;
                         }
-
                     }
+
+                    last_buffer_line_laid_out_count = layout.len();
                 }
 
-                line_index += 1;
+                buffer_line_index += 1;
             }
 
             let mut laid_out_runs = Vec::new();
@@ -234,11 +261,21 @@ pub mod render {
             let mut line_top = 0.0;
             let mut current_line_index = 0;
 
-            let laid_out_buffer_line_number = (line_index + 1).min(buffer.lines.len());
+            let laid_out_buffer_line_number = (buffer_line_index + 1).min(buffer.lines.len());
             for buffer_line_index in 0..laid_out_buffer_line_number {
                 let buffer_line = buffer.lines.get(buffer_line_index).unwrap();
                 let layout_lines = buffer_line.layout_opt().unwrap();
-                for line in layout_lines {
+
+                let number_of_lines_to_parse =
+                    if buffer_line_index == laid_out_buffer_line_number - 1 {
+                        last_buffer_line_laid_out_count
+                    } else {
+                        layout_lines.len()
+                    };
+
+                for layout_line_index in 0..number_of_lines_to_parse {
+                    let line = layout_lines.get(layout_line_index).unwrap();
+
                     let line_height = line.line_height_opt.unwrap();
                     let glyph_height = line.max_ascent + line.max_descent;
                     let centering_offset = (line_height - glyph_height) / 2.0;
@@ -764,14 +801,36 @@ pub mod render {
             let (x_offset, y_offset) = self.active_transform.unwrap_or_default().into();
             let (x_offset, y_offset) = with_scale!(self, x_offset, y_offset);
 
-            for y_index in 0..image.placement.height {
-                let y = y_offset.saturating_add_signed(
-                    (physical_glyph.y - image.placement.top + y_index as i32) as isize,
+            let x_base =
+                x_offset.saturating_add_signed((physical_glyph.x + image.placement.left) as isize);
+            let y_base =
+                y_offset.saturating_add_signed((physical_glyph.y - image.placement.top) as isize);
+
+            if cfg!(debug_assertions) {
+                let scaled_width = self.buffer_scale * self.width;
+                let scaled_height = self.buffer_scale * self.height;
+
+                let x_max = x_base + image.placement.width as usize - 1;
+                let y_max = y_base + image.placement.height as usize - 1;
+
+                assert!(
+                    x_max < scaled_width,
+                    "Trying to render glyph at x {}, with a backing store of width {}",
+                    x_max,
+                    scaled_width
                 );
+                assert!(
+                    y_max < scaled_height,
+                    "Trying to render glyph at y {}, with a backing store of height {}",
+                    y_max,
+                    scaled_height
+                );
+            }
+
+            for y_index in 0..image.placement.height {
+                let y = y_base + y_index as usize;
                 for x_index in 0..image.placement.width {
-                    let x = x_offset.saturating_add_signed(
-                        (physical_glyph.x + image.placement.left + x_index as i32) as isize,
-                    );
+                    let x = x_base + x_index as usize;
 
                     render_at(
                         x,
