@@ -443,7 +443,7 @@ pub mod dispatcher {
                     state.add_output(name, proxy.clone());
                 }
                 EventType::Done => {
-                    state.pending_data_amount -= 1;
+                    state.pending_data_amount = state.pending_data_amount.saturating_sub(1);
                 }
                 _ => {
                     debug_println!("WlOutput: {:?}", event);
