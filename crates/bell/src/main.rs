@@ -117,7 +117,7 @@ fn render_notification(
                     if data.width <= 64 {
                         data.width * 64i32.div_euclid(data.width)
                     } else {
-                        64 - data.width.rem_euclid(64)
+                        data.width / (data.width.div_euclid(64i32) + data.width.rem_euclid(64i32).clamp(0, 1))
                     }
                 } as usize;
 
@@ -184,7 +184,7 @@ fn render_notification(
 
         let font_size = text_options.font_size;
         let line_height = text_options.line_height;
-        // NOTE: Arbitrary values to make a reasonable line height.
+
         let metrics = Metrics::new(font_size, line_height);
         let mut attrs = default_text_opts
             .clone()
