@@ -341,6 +341,20 @@ pub mod render {
             let width_scale = (width as f32) / (image.width as f32);
             let height_scale = (height as f32) / (image.height as f32);
 
+            let bytes_per_sample = image.bits_per_sample / std::mem::size_of::<u8>() as i32;
+            if image.data.len() < (image.width * image.height * bytes_per_sample) as usize {
+                eprintln!(
+                    "Malformed image data received: It should have {}x{} size with {} bytes per sample ({} total bytes), but it actually has {} total bytes.",
+                    image.width,
+                    image.height,
+                    bytes_per_sample,
+                    image.width * image.height * bytes_per_sample,
+                    image.data.len()
+                );
+
+                return;
+            }
+
             for y_offset in 0..image.height {
                 let y_point = y + (y_offset as f32 * height_scale) as usize;
                 for x_offset in 0..image.width {
