@@ -232,10 +232,78 @@ impl Default for UrgencyConfiguration {
     }
 }
 
+struct EnableOptionVisitor;
+impl<'de> Visitor<'de> for EnableOptionVisitor {
+    type Value = Option<EnableOption>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a bool or a EnableOption option (Enabled, Disabled)")
+    }
+
+    fn visit_str<E>(self, data: &str) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        match data.to_lowercase().as_str() {
+            "enabled" => Ok(Some(EnableOption::Enabled)),
+            "when-active" => Ok(Some(EnableOption::WhenActive)),
+            "disabled" => Ok(Some(EnableOption::Disabled)),
+            _ => Err(E::unknown_variant(
+                data,
+                &["enabled", "when-active", "disabled"],
+            )),
+        }
+    }
+
+    fn visit_bool<E>(self, data: bool) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(Some(EnableOption::from(data)))
+    }
+}
+fn deserialize_enable_option<'de, D>(deserializer: D) -> Result<Option<EnableOption>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    deserializer.deserialize_any(EnableOptionVisitor)
+}
+
+#[derive(Copy, Clone, Debug, Deserialize, Eq, PartialEq)]
+pub enum EnableOption {
+    Enabled,
+    #[serde(rename = "when-active")]
+    WhenActive,
+    Disabled,
+}
+
+impl Default for EnableOption {
+    fn default() -> Self {
+        EnableOption::Disabled
+    }
+}
+
+impl Into<bool> for EnableOption {
+    fn into(self) -> bool {
+        match self {
+            Self::Enabled => true,
+            Self::WhenActive => true,
+            Self::Disabled => false,
+        }
+    }
+}
+
+impl From<bool> for EnableOption {
+    fn from(value: bool) -> Self {
+        if value { Self::Enabled } else { Self::Disabled }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct OutputConfiguration {
+    #[serde(deserialize_with = "deserialize_enable_option")]
     #[serde(default)]
-    pub enabled: Option<bool>,
+    pub enabled: Option<EnableOption>,
 
     #[serde(default)]
     pub width: Option<i32>,
@@ -414,8 +482,11 @@ impl UrgencyConfiguration {
                     let mut parse_sections = |sections: Vec<&str>| {
                         let preprocessed_fragment = sections.join("\n");
                         if !preprocessed_fragment.is_empty() {
-                            let (parsed_fragment, font_size, line_height, text_color) =
-                                self.parse_layout_fragment(&preprocessed_fragment, starting_text_options);
+                            let (parsed_fragment, font_size, line_height, text_color) = self
+                                .parse_layout_fragment(
+                                    &preprocessed_fragment,
+                                    starting_text_options,
+                                );
 
                             current_text_options.font_size = font_size;
                             current_text_options.line_height = line_height;
@@ -434,7 +505,7 @@ impl UrgencyConfiguration {
                             if fragment_section.is_empty() {
                                 // Ignore segmenting of the last empty section, since X '\n's generate
                                 // X + 1 sections, but we only want to have X sections in the final output.
-                                // 
+                                //
                                 // If peek.is_some:
                                 //   If is_empty:
                                 //     Fragment: (...)\n.\n($ | \n(...)) | ^.\n($ | \n(...))
@@ -468,7 +539,8 @@ impl UrgencyConfiguration {
                             parse_sections(current_sections);
                             current_sections = Vec::new();
 
-                            let section = format!("line_height={} \n", (current_line_height / 2.0).min(12.0));
+                            let section =
+                                format!("line_height={} \n", (current_line_height / 2.0).min(12.0));
                             parse_sections(vec![&section; 1]);
                         } else {
                             current_sections.push(fragment_section);
@@ -551,7 +623,9 @@ impl UrgencyConfiguration {
 
         let font_size = font_size.expect("Failed to parse font size for layout fragment.");
         let line_height = line_height.unwrap_or(font_size + 4.0);
-        let text_color = text_color.expect("Failed to parse text color for layout fragment.").0;
+        let text_color = text_color
+            .expect("Failed to parse text color for layout fragment.")
+            .0;
 
         (fragment, font_size, line_height, text_color)
     }
@@ -1087,6 +1161,7 @@ font_size = 14
     assert!(fragment_called);
 }
 
+#[allow(unused_macros)]
 macro_rules! format_color {
     ($value:expr) => {
         format!(
@@ -1099,6 +1174,7 @@ macro_rules! format_color {
     };
 }
 
+#[allow(unused_macros)]
 macro_rules! assert_eq_color {
     ($got:expr,$expected:expr) => {
         let got_str = format_color!($got);
@@ -1157,5 +1233,47 @@ fn test_custom_urgency_levels() {
     assert_eq_color!(
         critical_urgency_config.border_color.unwrap(),
         Color::rgba(0xFF, 0x66, 0x44, 0xFF)
+    );
+}
+
+#[test]
+fn test_enable_output() {
+    let file_contents = r#"
+        enabled = true
+
+        [outputs."eDP-1"]
+        width = 300
+        height = 120
+
+        [outputs."HDMI-A-1"]
+        enabled = false
+
+        [outputs."ABC"]
+        enabled = "when-active"
+    "#
+    .to_owned();
+
+    let configuration = Configuration::from_string(&file_contents);
+
+    if let Err(error) = configuration {
+        panic!("{}", error.to_string());
+    }
+
+    let configuration = configuration.unwrap();
+    assert_eq!(
+        configuration.default_output_config.enabled,
+        Some(EnableOption::Enabled)
+    );
+    assert_eq!(
+        configuration.outputs.get("eDP-1").unwrap().enabled,
+        Some(EnableOption::Enabled)
+    );
+    assert_eq!(
+        configuration.outputs.get("HDMI-A-1").unwrap().enabled,
+        Some(EnableOption::Disabled)
+    );
+    assert_eq!(
+        configuration.outputs.get("ABC").unwrap().enabled,
+        Some(EnableOption::WhenActive)
     );
 }

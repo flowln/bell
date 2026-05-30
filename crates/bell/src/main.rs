@@ -117,7 +117,9 @@ fn render_notification(
                     if data.width <= 64 {
                         data.width * 64i32.div_euclid(data.width)
                     } else {
-                        data.width / (data.width.div_euclid(64i32) + data.width.rem_euclid(64i32).clamp(0, 1))
+                        data.width
+                            / (data.width.div_euclid(64i32)
+                                + data.width.rem_euclid(64i32).clamp(0, 1))
                     }
                 } as usize;
 
@@ -270,6 +272,7 @@ fn process_surface(
     offset_per_output: &mut HashMap<String, i32>,
     notification: &Notification,
     surface_id: &ObjectId,
+    output_name: &String,
 ) -> SurfaceProcessingOutput {
     let mut wayland_state = wayland::wayland_state_write(None);
 
@@ -283,7 +286,6 @@ fn process_surface(
         return SurfaceProcessingOutput::SurfaceDestroyed;
     }
 
-    let output_name = surface.output_name.clone();
     let will_destroy = surface.will_destroy_later() || notification.has_timed_out();
 
     let output_spec = notification.get_output_spec(&output_name).unwrap();
@@ -330,10 +332,10 @@ fn process_surface(
     // We'll destroy it at the end of the current cycle, but for now we keep it alive so
     // that it correctly transfers surface focus when unmapping.
     if !will_destroy {
-        if !offset_per_output.contains_key(&output_name) {
+        if !offset_per_output.contains_key(output_name) {
             offset_per_output.insert(output_name.clone(), 0);
         }
-        let offset = offset_per_output.get_mut(&output_name).unwrap();
+        let offset = offset_per_output.get_mut(output_name).unwrap();
 
         with_offset(offset, output_spec, try_rendering);
     }
@@ -503,6 +505,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut manager_callback =
         |surface_id: &wayland::SurfaceID,
+         output_name: &String,
          notification: &Notification,
          offset_per_output: &mut HashMap<String, i32>| {
             process_surface(
@@ -510,6 +513,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 offset_per_output,
                 notification,
                 surface_id,
+                output_name,
             )
         };
 

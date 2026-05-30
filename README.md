@@ -115,7 +115,14 @@ on-notification-received = { play-sound = "mpv" }
 
 # Specify per-input options.
 [outputs."eDP-1"]
-# Enable notifications to show up in this output.
+# Enable notifications to show up in this output. Options are:
+#   true (or "enabled"): Always show notifications on this output.
+#   false (or "disabled"): Never show notifications on this output.
+#   "when-active": Only show notifications on this output if it is active
+#       (depending on the compositor, this could either mean focused or most recently interacted with).
+#
+# A common approach is to set this option globally (for all outputs, or outside of an output grouping)
+# to "when-active", so that a notification will only show on the currently active output.
 enabled = true
 
 # Default font family to use.

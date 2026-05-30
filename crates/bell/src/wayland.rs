@@ -22,8 +22,8 @@ use wayland_client::{EventQueue, Proxy, QueueHandle};
 
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1::WpCursorShapeManagerV1;
 
-use wayland_protocols::ext::idle_notify::v1::client::ext_idle_notifier_v1::ExtIdleNotifierV1;
 use wayland_protocols::ext::idle_notify::v1::client::ext_idle_notification_v1::ExtIdleNotificationV1;
+use wayland_protocols::ext::idle_notify::v1::client::ext_idle_notifier_v1::ExtIdleNotifierV1;
 
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrLayerSurfaceV1;
@@ -232,7 +232,7 @@ pub struct Surface {
 
     memory_pool: Option<MemoryPool>,
 
-    pub output_name: String,
+    pub output_name: Option<String>,
     pub surface_width: i32,
     pub surface_height: i32,
 
@@ -258,8 +258,9 @@ impl Surface {
 
         let id = wl_surface.id();
 
-        let output_name = output_name.unwrap_or_default();
-        let output = wayland_state.get_output_by_name(output_name.as_str());
+        let output = output_name
+            .clone()
+            .map(|name| wayland_state.get_output_by_name(name.as_str()).unwrap());
 
         let surface_backend: SurfaceBackend;
         if let Some(wlr_layer) = wlr_layer {
@@ -490,7 +491,7 @@ pub struct WaylandState {
     pub cursor_shape_manager: Option<WpCursorShapeManagerV1>,
     pub(self) idle_state_manager: Option<ExtIdleNotifierV1>,
     pub(self) idle_state_notifications: OnceLock<HashMap<ObjectId, ExtIdleNotificationV1>>,
-    pub(self) current_idle_counter: u32,  // = 0 means it's not idle, > 0 means it's idle
+    pub(self) current_idle_counter: u32, // = 0 means it's not idle, > 0 means it's idle
 
     pub queue_handle: Option<QueueHandle<Self>>,
 
@@ -534,6 +535,16 @@ impl WaylandState {
         self.outputs.get()?.get(name)
     }
 
+    pub fn get_output_name_by_object(&self, obj: &WlOutput) -> Option<String> {
+        for (name, output) in self.outputs.get().unwrap().iter() {
+            if output.id() == obj.id() {
+                return Some(name.clone());
+            }
+        }
+
+        return None;
+    }
+
     pub fn get_output_names(&self) -> impl ExactSizeIterator<Item = &String> {
         self.outputs.get().unwrap().keys()
     }
@@ -554,7 +565,7 @@ impl WaylandState {
         &mut self,
         width: i32,
         height: i32,
-        output_name: &String,
+        output_name: Option<&String>,
     ) -> Option<SurfaceID> {
         if self.compositor.is_none() {
             return None;
@@ -566,7 +577,7 @@ impl WaylandState {
             return None;
         }
 
-        let mut surface = Surface::new(self, width, height, Some(output_name.clone()));
+        let mut surface = Surface::new(self, width, height, output_name.map(|s_ref| s_ref.clone()));
 
         surface.set_buffer_scale(self, 1);
 

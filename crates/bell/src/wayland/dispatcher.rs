@@ -18,14 +18,14 @@ pub mod dispatcher {
     };
     use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_manager_v1::WpCursorShapeManagerV1;
 
-    use wayland_protocols::ext::idle_notify::v1::client::ext_idle_notifier_v1::ExtIdleNotifierV1;
     use wayland_protocols::ext::idle_notify::v1::client::ext_idle_notification_v1::ExtIdleNotificationV1;
+    use wayland_protocols::ext::idle_notify::v1::client::ext_idle_notifier_v1::ExtIdleNotifierV1;
 
     use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1;
     use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::ZwlrLayerSurfaceV1;
 
-    use crate::wayland::WaylandState;
     use crate::notification::notification_manager_read;
+    use crate::wayland::WaylandState;
 
     macro_rules! debug_println {
         ($string:literal) => {
@@ -142,7 +142,12 @@ pub mod dispatcher {
                         } else {
                             seat.release();
 
-                            if let Some(notification) = state.idle_state_notifications.get_mut().unwrap().remove(&seat.id()) {
+                            if let Some(notification) = state
+                                .idle_state_notifications
+                                .get_mut()
+                                .unwrap()
+                                .remove(&seat.id())
+                            {
                                 notification.destroy();
 
                                 // Reset idle status. This won't be an issue for other idling seats, since we never go below 0.
@@ -392,8 +397,17 @@ pub mod dispatcher {
                             manager.get_configuration().unwrap().idle_time
                         };
 
-                        let notification = idle_state_manager.get_idle_notification(idle_time, proxy, queue_handle, IdleNotifierUserData {});
-                        state.idle_state_notifications.get_mut().unwrap().insert(proxy.id(), notification);
+                        let notification = idle_state_manager.get_idle_notification(
+                            idle_time,
+                            proxy,
+                            queue_handle,
+                            IdleNotifierUserData {},
+                        );
+                        state
+                            .idle_state_notifications
+                            .get_mut()
+                            .unwrap()
+                            .insert(proxy.id(), notification);
                     }
                 }
                 _ => {
@@ -420,6 +434,35 @@ pub mod dispatcher {
                             surface.set_buffer_scale(wl_state, factor)
                         })
                         .unwrap();
+                }
+                EventType::Enter { output } => {
+                    use crate::configuration::EnableOption;
+                    if let Some(output_name) = state.get_output_name_by_object(&output) {
+                        state
+                            .with_surface(&proxy.id(), |_wl_state, surface| {
+                                if surface.output_name.is_none() {
+                                    // We're a surface that got created by a when-active configuration
+                                    let manager = notification_manager_read(None);
+                                    let configuration = manager.get_configuration().expect("Received a WlSurface event without a valid configuration in place.");
+
+                                    match configuration.get_output_configuration(&output_name).enabled.unwrap_or_default() {
+                                        EnableOption::Enabled => {
+                                            // This output always shows notifications, so we actually just created two
+                                            // surfaces on it for the same notification. Delete this one immediately.
+                                            surface.destroy_now();
+                                        }
+                                        EnableOption::WhenActive => {
+                                            surface.output_name.replace(output_name.clone());
+                                        }
+                                        EnableOption::Disabled => {
+                                            // This output is not configured to display notifications. Delete immediately.
+                                            surface.destroy_now();
+                                        }
+                                    }
+                                }
+                            })
+                            .unwrap();
+                    }
                 }
                 _ => {
                     debug_println!("WlSurface: {:?}", event);
@@ -465,13 +508,19 @@ pub mod dispatcher {
             match event {
                 EventType::Idled => {
                     state.current_idle_counter += 1;
-                    debug_println!("Started idling. Current count: {}.", state.current_idle_counter);
+                    debug_println!(
+                        "Started idling. Current count: {}.",
+                        state.current_idle_counter
+                    );
                 }
                 EventType::Resumed => {
                     if state.current_idle_counter > 0 {
                         state.current_idle_counter -= 1;
                     }
-                    debug_println!("Resumed from idle. Current count: {}.", state.current_idle_counter);
+                    debug_println!(
+                        "Resumed from idle. Current count: {}.",
+                        state.current_idle_counter
+                    );
                 }
                 _ => unreachable!(),
             }

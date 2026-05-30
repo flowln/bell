@@ -1,4 +1,6 @@
-use crate::configuration::{Configuration, EventResponse, EventTrigger, OutputConfiguration};
+use crate::configuration::{
+    Configuration, EnableOption, EventResponse, EventTrigger, OutputConfiguration,
+};
 use crate::dbus::ImageData;
 use crate::wayland::{SurfaceBackend, SurfaceID, wayland_state_read, wayland_state_write};
 
@@ -66,7 +68,7 @@ pub struct Notification {
     pub transient: bool,
 
     outputs: HashMap<String, Arc<OutputConfiguration>>,
-    surface_ids: Vec<SurfaceID>,
+    surface_ids: Vec<(SurfaceID, String)>,
 }
 
 impl PartialEq for Notification {
@@ -120,7 +122,7 @@ impl Notification {
 
             for output_name in available_output_names {
                 let output_configuration = configuration.get_output_configuration(output_name);
-                if output_configuration.enabled.unwrap_or(false) {
+                if output_configuration.enabled.unwrap_or_default().into() {
                     self.try_add_output(output_name, output_configuration);
                 }
             }
@@ -128,8 +130,12 @@ impl Notification {
 
         let mut w_wayland_state = wayland_state_write(None);
         for (output_name, spec) in self.outputs.iter() {
-            let surface_id =
-                w_wayland_state.create_surface(spec.width?, spec.height?, output_name)?;
+            let output = if spec.enabled.is_some_and(|s| s == EnableOption::WhenActive) {
+                None
+            } else {
+                Some(output_name)
+            };
+            let surface_id = w_wayland_state.create_surface(spec.width?, spec.height?, output)?;
 
             // FIXME: This shouldn't be here probably.
             let surface = w_wayland_state.get_surface(&surface_id)?;
@@ -154,7 +160,7 @@ impl Notification {
                 }
             }
 
-            self.surface_ids.push(surface_id);
+            self.surface_ids.push((surface_id, output_name.clone()));
         }
 
         Some(())
@@ -237,7 +243,10 @@ impl Notification {
     }
 
     pub fn has_surface(&self, id: &SurfaceID) -> bool {
-        self.surface_ids.contains(id)
+        self.surface_ids
+            .iter()
+            .find(|(surface_id, _)| surface_id == id)
+            .is_some()
     }
 
     pub fn has_any_surface(&self) -> bool {
@@ -246,10 +255,10 @@ impl Notification {
 
     pub fn for_each_surface<F>(&self, mut closure: F)
     where
-        F: FnMut(&SurfaceID) -> (),
+        F: FnMut(&SurfaceID, &String) -> (),
     {
-        for id in self.surface_ids.iter() {
-            closure(id);
+        for (id, name) in self.surface_ids.iter() {
+            closure(id, name);
         }
     }
 
@@ -272,7 +281,11 @@ impl Notification {
         }
     }
 
-    pub(crate) fn set_timeout(&mut self, mut timeout: std::time::Duration, persist_when_idle: bool) {
+    pub(crate) fn set_timeout(
+        &mut self,
+        mut timeout: std::time::Duration,
+        persist_when_idle: bool,
+    ) {
         // TODO: Take handle into old thread (if it exists) and interrupt it.
 
         self.expire_timeout = Some(timeout);
@@ -312,13 +325,13 @@ impl Notification {
 
     fn expire(&mut self) {
         let ids = self.surface_ids.clone();
-        for id in ids.iter() {
+        for (id, _) in ids.iter() {
             self.delete_surface(id);
         }
     }
 
     fn delete_surface(&mut self, surface_id: &SurfaceID) {
-        self.surface_ids.retain(|id| id != surface_id);
+        self.surface_ids.retain(|(id, _)| id != surface_id);
 
         let mut wayland_state = wayland_state_write(None);
         wayland_state.mark_surface_for_destruction(surface_id);
@@ -519,7 +532,12 @@ impl NotificationManager {
         process_surface: &mut F,
     ) -> Vec<(u32, NotificationCloseReason)>
     where
-        F: FnMut(&SurfaceID, &Notification, &mut HashMap<String, i32>) -> SurfaceProcessingOutput,
+        F: FnMut(
+            &SurfaceID,
+            &String,
+            &Notification,
+            &mut HashMap<String, i32>,
+        ) -> SurfaceProcessingOutput,
     {
         let mut offset_per_output = HashMap::<String, i32>::new();
         let mut recentry_inactived_notifications = Vec::new();
@@ -527,8 +545,13 @@ impl NotificationManager {
         for (id, notification) in self.active_notifications.iter_mut() {
             let mut surfaces_to_delete = Vec::<SurfaceID>::new();
 
-            notification.for_each_surface(|surface_id| {
-                match process_surface(surface_id, notification, &mut offset_per_output) {
+            notification.for_each_surface(|surface_id, output_name| {
+                match process_surface(
+                    surface_id,
+                    output_name,
+                    notification,
+                    &mut offset_per_output,
+                ) {
                     SurfaceProcessingOutput::Continue => {}
                     SurfaceProcessingOutput::NoSurface => {
                         println!("No surface is available with id {surface_id:?}.");
