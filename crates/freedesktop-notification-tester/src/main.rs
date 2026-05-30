@@ -666,6 +666,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             wait_for_notification_close(&mut proxy, output.id, Duration::from_secs(5))?;
 
+            let mut hints = HashMap::new();
+            hints.insert(String::from("image-data"), create_128x128_image_data());
+
+            let output = send_notification(
+                &mut proxy,
+                NotifyMessageInput {
+                    app_name: String::from("freedesktop-notification-tester"),
+                    replaces_id: 0,
+                    app_icon: String::new(),
+                    summary: String::from("image-data"),
+                    body: String::from(
+                        "This is a notification with a 128x128 image, with rows of different repeating colors.\nIt will expire in 4s.",
+                    ),
+                    actions: Vec::new(),
+                    hints: hints,
+                    expire_timeout: 4000,
+                },
+            )?;
+
+            wait_for_notification_close(&mut proxy, output.id, Duration::from_secs(5))?;
+
+            let mut hints = HashMap::new();
+            hints.insert(String::from("image-data"), create_240x240_image_data());
+
+            let output = send_notification(
+                &mut proxy,
+                NotifyMessageInput {
+                    app_name: String::from("freedesktop-notification-tester"),
+                    replaces_id: 0,
+                    app_icon: String::new(),
+                    summary: String::from("image-data"),
+                    body: String::from(
+                        "This is a notification with a 240x240 image, with varying colors with 80% opacity.\nIt will expire in 4s.",
+                    ),
+                    actions: Vec::new(),
+                    hints: hints,
+                    expire_timeout: 4000,
+                },
+            )?;
+
+            wait_for_notification_close(&mut proxy, output.id, Duration::from_secs(5))?;
+
             Ok(true)
         });
     }
