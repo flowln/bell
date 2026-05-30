@@ -8,7 +8,7 @@ pub fn create_16x16_image_data() -> Variant<Box<dyn RefArg>> {
         height: 16,
         rowstride: 16 * 3 * std::mem::size_of::<u8>() as i32,
         has_alpha: false,
-        bits_per_sample: 3 * std::mem::size_of::<u8>() as i32,
+        bits_per_sample: std::mem::size_of::<u8>() as i32,
         channels: 3,
         data: get_16x16_opaque_image(),
     };
@@ -37,7 +37,7 @@ pub fn create_24x24_image_data() -> Variant<Box<dyn RefArg>> {
         height: 24,
         rowstride: 24 * 4 * std::mem::size_of::<u8>() as i32,
         has_alpha: true,
-        bits_per_sample: 4 * std::mem::size_of::<u8>() as i32,
+        bits_per_sample: std::mem::size_of::<u8>() as i32,
         channels: 4,
         data: get_24x24_translucent_image(),
     };
@@ -69,7 +69,7 @@ pub fn create_128x128_image_data() -> Variant<Box<dyn RefArg>> {
         height: 128,
         rowstride: 128 * 3 * std::mem::size_of::<u8>() as i32,
         has_alpha: false,
-        bits_per_sample: 3 * std::mem::size_of::<u8>() as i32,
+        bits_per_sample: std::mem::size_of::<u8>() as i32,
         channels: 3,
         data: get_128x128_opaque_image(),
     };
@@ -107,7 +107,7 @@ pub fn create_240x240_image_data() -> Variant<Box<dyn RefArg>> {
         height: 240,
         rowstride: 240 * 4 * std::mem::size_of::<u8>() as i32,
         has_alpha: true,
-        bits_per_sample: 4 * std::mem::size_of::<u8>() as i32,
+        bits_per_sample: std::mem::size_of::<u8>() as i32,
         channels: 4,
         data: get_240x240_translucent_image(),
     };
